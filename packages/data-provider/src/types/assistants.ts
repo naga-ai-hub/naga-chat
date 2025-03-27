@@ -150,11 +150,12 @@ export type File = {
 
 /* Agent types */
 
-export type AgentParameterValue = number | null;
+export type AgentParameterValue = number | string | null;
 
 export type AgentModelParameters = {
   model?: string;
   temperature: AgentParameterValue;
+  maxContextTokens: AgentParameterValue;
   max_context_tokens: AgentParameterValue;
   max_output_tokens: AgentParameterValue;
   top_p: AgentParameterValue;
@@ -222,6 +223,7 @@ export type Agent = {
   end_after_tools?: boolean;
   hide_sequential_outputs?: boolean;
   artifacts?: ArtifactModes;
+  recursion_limit?: number;
 };
 
 export type TAgentsMap = Record<string, Agent | undefined>;
@@ -236,7 +238,10 @@ export type AgentCreateParams = {
   provider: AgentProvider;
   model: string | null;
   model_parameters: AgentModelParameters;
-} & Pick<Agent, 'agent_ids' | 'end_after_tools' | 'hide_sequential_outputs' | 'artifacts'>;
+} & Pick<
+  Agent,
+  'agent_ids' | 'end_after_tools' | 'hide_sequential_outputs' | 'artifacts' | 'recursion_limit'
+>;
 
 export type AgentUpdateParams = {
   name?: string | null;
@@ -252,7 +257,10 @@ export type AgentUpdateParams = {
   projectIds?: string[];
   removeProjectIds?: string[];
   isCollaborative?: boolean;
-} & Pick<Agent, 'agent_ids' | 'end_after_tools' | 'hide_sequential_outputs' | 'artifacts'>;
+} & Pick<
+  Agent,
+  'agent_ids' | 'end_after_tools' | 'hide_sequential_outputs' | 'artifacts' | 'recursion_limit'
+>;
 
 export type AgentListParams = {
   limit?: number;
@@ -440,7 +448,7 @@ export type ContentPart = (
   PartMetadata;
 
 export type TMessageContentParts =
-  | { type: ContentTypes.ERROR; text: Text & PartMetadata }
+  | { type: ContentTypes.ERROR; text?: string | (Text & PartMetadata); error?: string }
   | { type: ContentTypes.THINK; think: string | (Text & PartMetadata) }
   | { type: ContentTypes.TEXT; text: string | (Text & PartMetadata); tool_call_ids?: string[] }
   | {
@@ -455,6 +463,7 @@ export type TMessageContentParts =
         PartMetadata;
     }
   | { type: ContentTypes.IMAGE_FILE; image_file: ImageFile & PartMetadata }
+  | Agents.AgentUpdate
   | Agents.MessageContentImageUrl;
 
 export type StreamContentData = TMessageContentParts & {

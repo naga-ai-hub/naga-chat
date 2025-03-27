@@ -47,6 +47,7 @@ export enum BedrockProviders {
   Meta = 'meta',
   MistralAI = 'mistral',
   StabilityAI = 'stability',
+  DeepSeek = 'deepseek',
 }
 
 export const getModelKey = (endpoint: EModelEndpoint | string, model: string) => {
@@ -157,6 +158,7 @@ export const defaultAgentFormValues = {
   projectIds: [],
   artifacts: '',
   isCollaborative: false,
+  recursion_limit: undefined,
   [Tools.execute_code]: false,
   [Tools.file_search]: false,
 };
@@ -228,7 +230,7 @@ export const googleSettings = {
   },
   maxOutputTokens: {
     min: 1 as const,
-    max: 8192 as const,
+    max: 64000 as const,
     step: 1 as const,
     default: 8192 as const,
   },
@@ -643,6 +645,8 @@ export const tConvoUpdateSchema = tConversationSchema.merge(
 export const tQueryParamsSchema = tConversationSchema
   .pick({
     // librechat settings
+    /** The model spec to be used */
+    spec: true,
     /** The AI context window, overrides the system-defined window as determined by `model` value */
     maxContextTokens: true,
     /**

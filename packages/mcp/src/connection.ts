@@ -134,7 +134,12 @@ export class MCPConnection extends EventEmitter {
           }
           const url = new URL(options.url);
           this.logger?.info(`[MCP][${this.serverName}] Creating SSE transport: ${url.toString()}`);
-          const transport = new SSEClientTransport(url);
+          const abortController = new AbortController();
+          const transport = new SSEClientTransport(url, {
+            requestInit: {
+              signal: abortController.signal,
+            },
+          });
 
           transport.onclose = () => {
             this.logger?.info(`[MCP][${this.serverName}] SSE transport closed`);
@@ -175,6 +180,17 @@ export class MCPConnection extends EventEmitter {
         this.isInitializing = false;
         this.shouldStopReconnecting = false;
         this.reconnectAttempts = 0;
+        /**
+         * // FOR DEBUGGING
+         * // this.client.setRequestHandler(PingRequestSchema, async (request, extra) => {
+         * //    this.logger?.info(`[MCP][${this.serverName}] PingRequest: ${JSON.stringify(request)}`);
+         * //    if (getEventListeners && extra.signal) {
+         * //      const listenerCount = getEventListeners(extra.signal, 'abort').length;
+         * //      this.logger?.debug(`Signal has ${listenerCount} abort listeners`);
+         * //    }
+         * //    return {};
+         * //  });
+         */
       } else if (state === 'error' && !this.isReconnecting && !this.isInitializing) {
         this.handleReconnection().catch((error) => {
           this.logger?.error(`[MCP][${this.serverName}] Reconnection handler failed:`, error);
@@ -269,7 +285,7 @@ export class MCPConnection extends EventEmitter {
         this.transport = this.constructTransport(this.options);
         this.setupTransportDebugHandlers();
 
-        const connectTimeout = 10000;
+        const connectTimeout = this.options.initTimeout ?? 10000;
         await Promise.race([
           this.client.connect(this.transport),
           new Promise((_resolve, reject) =>
