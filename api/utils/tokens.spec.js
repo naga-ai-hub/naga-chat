@@ -113,6 +113,43 @@ describe('getModelMaxTokens', () => {
     );
   });
 
+  test('should return correct tokens for gpt-4.1 matches', () => {
+    expect(getModelMaxTokens('gpt-4.1')).toBe(maxTokensMap[EModelEndpoint.openAI]['gpt-4.1']);
+    expect(getModelMaxTokens('gpt-4.1-preview')).toBe(
+      maxTokensMap[EModelEndpoint.openAI]['gpt-4.1'],
+    );
+    expect(getModelMaxTokens('openai/gpt-4.1')).toBe(
+      maxTokensMap[EModelEndpoint.openAI]['gpt-4.1'],
+    );
+    expect(getModelMaxTokens('gpt-4.1-2024-08-06')).toBe(
+      maxTokensMap[EModelEndpoint.openAI]['gpt-4.1'],
+    );
+  });
+
+  test('should return correct tokens for gpt-4.1-mini matches', () => {
+    expect(getModelMaxTokens('gpt-4.1-mini')).toBe(
+      maxTokensMap[EModelEndpoint.openAI]['gpt-4.1-mini'],
+    );
+    expect(getModelMaxTokens('gpt-4.1-mini-preview')).toBe(
+      maxTokensMap[EModelEndpoint.openAI]['gpt-4.1-mini'],
+    );
+    expect(getModelMaxTokens('openai/gpt-4.1-mini')).toBe(
+      maxTokensMap[EModelEndpoint.openAI]['gpt-4.1-mini'],
+    );
+  });
+
+  test('should return correct tokens for gpt-4.1-nano matches', () => {
+    expect(getModelMaxTokens('gpt-4.1-nano')).toBe(
+      maxTokensMap[EModelEndpoint.openAI]['gpt-4.1-nano'],
+    );
+    expect(getModelMaxTokens('gpt-4.1-nano-preview')).toBe(
+      maxTokensMap[EModelEndpoint.openAI]['gpt-4.1-nano'],
+    );
+    expect(getModelMaxTokens('openai/gpt-4.1-nano')).toBe(
+      maxTokensMap[EModelEndpoint.openAI]['gpt-4.1-nano'],
+    );
+  });
+
   test('should return correct tokens for Anthropic models', () => {
     const models = [
       'claude-2.1',
@@ -303,6 +340,15 @@ describe('getModelMaxTokens', () => {
     expect(getModelMaxTokens('o1-preview-something')).toBe(o1PreviewTokens);
     expect(getModelMaxTokens('openai/o1-preview-something')).toBe(o1PreviewTokens);
   });
+
+  test('should return correct max context tokens for o4-mini and o3', () => {
+    const o4MiniTokens = maxTokensMap[EModelEndpoint.openAI]['o4-mini'];
+    const o3Tokens = maxTokensMap[EModelEndpoint.openAI]['o3'];
+    expect(getModelMaxTokens('o4-mini')).toBe(o4MiniTokens);
+    expect(getModelMaxTokens('openai/o4-mini')).toBe(o4MiniTokens);
+    expect(getModelMaxTokens('o3')).toBe(o3Tokens);
+    expect(getModelMaxTokens('openai/o3')).toBe(o3Tokens);
+  });
 });
 
 describe('matchModelName', () => {
@@ -353,6 +399,25 @@ describe('matchModelName', () => {
     expect(matchModelName('gpt-4-0125')).toBe('gpt-4-0125');
     expect(matchModelName('gpt-4-0125-preview')).toBe('gpt-4-0125');
     expect(matchModelName('gpt-4-0125-vision-preview')).toBe('gpt-4-0125');
+  });
+
+  it('should return the closest matching key for gpt-4.1 matches', () => {
+    expect(matchModelName('openai/gpt-4.1')).toBe('gpt-4.1');
+    expect(matchModelName('gpt-4.1-preview')).toBe('gpt-4.1');
+    expect(matchModelName('gpt-4.1-2024-08-06')).toBe('gpt-4.1');
+    expect(matchModelName('gpt-4.1-2024-08-06-0718')).toBe('gpt-4.1');
+  });
+
+  it('should return the closest matching key for gpt-4.1-mini matches', () => {
+    expect(matchModelName('openai/gpt-4.1-mini')).toBe('gpt-4.1-mini');
+    expect(matchModelName('gpt-4.1-mini-preview')).toBe('gpt-4.1-mini');
+    expect(matchModelName('gpt-4.1-mini-2024-08-06')).toBe('gpt-4.1-mini');
+  });
+
+  it('should return the closest matching key for gpt-4.1-nano matches', () => {
+    expect(matchModelName('openai/gpt-4.1-nano')).toBe('gpt-4.1-nano');
+    expect(matchModelName('gpt-4.1-nano-preview')).toBe('gpt-4.1-nano');
+    expect(matchModelName('gpt-4.1-nano-2024-08-06')).toBe('gpt-4.1-nano');
   });
 
   // Tests for Google models

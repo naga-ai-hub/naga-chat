@@ -2,7 +2,9 @@ const z = require('zod');
 const { EModelEndpoint } = require('librechat-data-provider');
 
 const openAIModels = {
+  'o4-mini': 200000,
   'o3-mini': 195000, // -5000 from max
+  o3: 200000,
   o1: 195000, // -5000 from max
   'o1-mini': 127500, // -500 from max
   'o1-preview': 127500, // -500 from max
@@ -14,6 +16,9 @@ const openAIModels = {
   'gpt-4-1106': 127500, // -500 from max
   'gpt-4-0125': 127500, // -500 from max
   'gpt-4.5': 127500, // -500 from max
+  'gpt-4.1': 1047576,
+  'gpt-4.1-mini': 1047576,
+  'gpt-4.1-nano': 1047576,
   'gpt-4o': 127500, // -500 from max
   'gpt-4o-mini': 127500, // -500 from max
   'gpt-4o-2024-05-13': 127500, // -500 from max

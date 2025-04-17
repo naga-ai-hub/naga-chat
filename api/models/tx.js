@@ -76,10 +76,15 @@ const tokenValues = Object.assign(
     '4k': { prompt: 1.5, completion: 2 },
     '16k': { prompt: 3, completion: 4 },
     'gpt-3.5-turbo-1106': { prompt: 1, completion: 2 },
+    'o4-mini': { prompt: 1.1, completion: 4.4 },
     'o3-mini': { prompt: 1.1, completion: 4.4 },
+    o3: { prompt: 10, completion: 40 },
     'o1-mini': { prompt: 1.1, completion: 4.4 },
     'o1-preview': { prompt: 15, completion: 60 },
     o1: { prompt: 15, completion: 60 },
+    'gpt-4.1-nano': { prompt: 0.1, completion: 0.4 },
+    'gpt-4.1-mini': { prompt: 0.4, completion: 1.6 },
+    'gpt-4.1': { prompt: 2, completion: 8 },
     'gpt-4.5': { prompt: 75, completion: 150 },
     'gpt-4o-mini': { prompt: 0.15, completion: 0.6 },
     'gpt-4o': { prompt: 2.5, completion: 10 },
@@ -183,6 +188,12 @@ const getValueKey = (model, endpoint) => {
     return 'o1';
   } else if (modelName.includes('gpt-4.5')) {
     return 'gpt-4.5';
+  } else if (modelName.includes('gpt-4.1-nano')) {
+    return 'gpt-4.1-nano';
+  } else if (modelName.includes('gpt-4.1-mini')) {
+    return 'gpt-4.1-mini';
+  } else if (modelName.includes('gpt-4.1')) {
+    return 'gpt-4.1';
   } else if (modelName.includes('gpt-4o-2024-05-13')) {
     return 'gpt-4o-2024-05-13';
   } else if (modelName.includes('gpt-4o-mini')) {
