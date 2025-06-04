@@ -319,17 +319,7 @@ const handleAbortError = async (res, req, error, data) => {
     );
   }
 
-  let errorText = error?.message?.includes('"type"')
-    ? error.message
-    : 'An error occurred while processing your request. Please contact the Admin.';
-
-  if (error?.type === ErrorTypes.INVALID_REQUEST) {
-    errorText = `{"type":"${ErrorTypes.INVALID_REQUEST}"}`;
-  }
-
-  if (error?.message?.includes("does not support 'system'")) {
-    errorText = `{"type":"${ErrorTypes.NO_SYSTEM_MESSAGES}"}`;
-  }
+  const errorText = error?.message || 'An error occurred while processing your request. Please contact the Admin.';
 
   /**
    * @param {string} partialText
