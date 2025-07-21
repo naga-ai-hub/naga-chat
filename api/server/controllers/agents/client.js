@@ -1,11 +1,14 @@
 require('events').EventEmitter.defaultMaxListeners = 100;
 const { logger } = require('@librechat/data-schemas');
+const { DynamicStructuredTool } = require('@langchain/core/tools');
+const { getBufferString, HumanMessage } = require('@langchain/core/messages');
 const {
   sendEvent,
   createRun,
   Tokenizer,
   checkAccess,
   memoryInstructions,
+  formatContentStrings,
   createMemoryProcessor,
 } = require('@librechat/api');
 const {
@@ -14,7 +17,6 @@ const {
   GraphEvents,
   formatMessage,
   formatAgentMessages,
-  formatContentStrings,
   getTokenCountForMessage,
   createMetadataAggregator,
 } = require('@librechat/agents');
@@ -24,20 +26,22 @@ const {
   VisionModes,
   ContentTypes,
   EModelEndpoint,
-  KnownEndpoints,
   PermissionTypes,
   isAgentsEndpoint,
   AgentCapabilities,
   bedrockInputSchema,
   removeNullishValues,
 } = require('librechat-data-provider');
-const { DynamicStructuredTool } = require('@langchain/core/tools');
-const { getBufferString, HumanMessage } = require('@langchain/core/messages');
-const { createGetMCPAuthMap, checkCapability } = require('~/server/services/Config');
+const {
+  findPluginAuthsByKeys,
+  getFormattedMemories,
+  deleteMemory,
+  setMemory,
+} = require('~/models');
+const { getMCPAuthMap, checkCapability, hasCustomUserVars } = require('~/server/services/Config');
 const { addCacheControl, createContextHandlers } = require('~/app/clients/prompts');
 const { initializeAgent } = require('~/server/services/Endpoints/agents/agent');
 const { spendTokens, spendStructuredTokens } = require('~/models/spendTokens');
-const { getFormattedMemories, deleteMemory, setMemory } = require('~/models');
 const { encodeAndFormat } = require('~/server/services/Files/images/encode');
 const { getProviderConfig } = require('~/server/services/Endpoints');
 const BaseClient = require('~/app/clients/BaseClient');
@@ -54,6 +58,7 @@ const omitTitleOptions = new Set([
   'thinkingBudget',
   'includeThoughts',
   'maxOutputTokens',
+  'additionalModelRequestFields',
 ]);
 
 /**
@@ -69,8 +74,6 @@ const payloadParser = ({ req, agent, endpoint }) => {
   }
   return req.body.endpointOption.model_parameters;
 };
-
-const legacyContentEndpoints = new Set([KnownEndpoints.groq, KnownEndpoints.deepseek]);
 
 const noSystemModelRegex = [/\b(o1-preview|o1-mini|amazon\.titan-text)\b/gi];
 
@@ -452,6 +455,12 @@ class AgentClient extends BaseClient {
       res: this.options.res,
       agent: prelimAgent,
       allowedProviders,
+      endpointOption: {
+        endpoint:
+          prelimAgent.id !== Constants.EPHEMERAL_AGENT_ID
+            ? EModelEndpoint.agents
+            : memoryConfig.agent?.provider,
+      },
     });
 
     if (!agent) {
@@ -700,17 +709,12 @@ class AgentClient extends BaseClient {
         version: 'v2',
       };
 
-      const getUserMCPAuthMap = await createGetMCPAuthMap();
-
       const toolSet = new Set((this.options.agent.tools ?? []).map((tool) => tool && tool.name));
       let { messages: initialMessages, indexTokenCountMap } = formatAgentMessages(
         payload,
         this.indexTokenCountMap,
         toolSet,
       );
-      if (legacyContentEndpoints.has(this.options.agent.endpoint?.toLowerCase())) {
-        initialMessages = formatContentStrings(initialMessages);
-      }
 
       /**
        *
@@ -774,6 +778,9 @@ class AgentClient extends BaseClient {
         }
 
         let messages = _messages;
+        if (agent.useLegacyContent === true) {
+          messages = formatContentStrings(messages);
+        }
         if (
           agent.model_parameters?.clientOptions?.defaultHeaders?.['anthropic-beta']?.includes(
             'prompt-caching',
@@ -822,10 +829,11 @@ class AgentClient extends BaseClient {
         }
 
         try {
-          if (getUserMCPAuthMap) {
-            config.configurable.userMCPAuthMap = await getUserMCPAuthMap({
+          if (await hasCustomUserVars()) {
+            config.configurable.userMCPAuthMap = await getMCPAuthMap({
               tools: agent.tools,
               userId: this.options.req.user.id,
+              findPluginAuthsByKeys,
             });
           }
         } catch (err) {
@@ -1043,6 +1051,12 @@ class AgentClient extends BaseClient {
       options.llmConfig?.azureOpenAIApiInstanceName == null
     ) {
       provider = Providers.OPENAI;
+    } else if (
+      endpoint === EModelEndpoint.azureOpenAI &&
+      options.llmConfig?.azureOpenAIApiInstanceName != null &&
+      provider !== Providers.AZURE
+    ) {
+      provider = Providers.AZURE;
     }
 
     /** @type {import('@librechat/agents').ClientOptions} */
@@ -1121,8 +1135,52 @@ class AgentClient extends BaseClient {
     }
   }
 
-  /** Silent method, as `recordCollectedUsage` is used instead */
-  async recordTokenUsage() {}
+  /**
+   * @param {object} params
+   * @param {number} params.promptTokens
+   * @param {number} params.completionTokens
+   * @param {OpenAIUsageMetadata} [params.usage]
+   * @param {string} [params.model]
+   * @param {string} [params.context='message']
+   * @returns {Promise<void>}
+   */
+  async recordTokenUsage({ model, promptTokens, completionTokens, usage, context = 'message' }) {
+    try {
+      await spendTokens(
+        {
+          model,
+          context,
+          conversationId: this.conversationId,
+          user: this.user ?? this.options.req.user?.id,
+          endpointTokenConfig: this.options.endpointTokenConfig,
+        },
+        { promptTokens, completionTokens },
+      );
+
+      if (
+        usage &&
+        typeof usage === 'object' &&
+        'reasoning_tokens' in usage &&
+        typeof usage.reasoning_tokens === 'number'
+      ) {
+        await spendTokens(
+          {
+            model,
+            context: 'reasoning',
+            conversationId: this.conversationId,
+            user: this.user ?? this.options.req.user?.id,
+            endpointTokenConfig: this.options.endpointTokenConfig,
+          },
+          { completionTokens: usage.reasoning_tokens },
+        );
+      }
+    } catch (error) {
+      logger.error(
+        '[api/server/controllers/agents/client.js #recordTokenUsage] Error recording token usage',
+        error,
+      );
+    }
+  }
 
   getEncoding() {
     return 'o200k_base';
