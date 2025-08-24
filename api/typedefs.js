@@ -889,6 +889,12 @@
  */
 
 /**
+ * @exports IRole
+ * @typedef {import('@librechat/data-schemas').IRole} IRole
+ * @memberof typedefs
+ */
+
+/**
  * @exports ObjectId
  * @typedef {import('mongoose').Types.ObjectId} ObjectId
  * @memberof typedefs
@@ -1072,6 +1078,19 @@
  * @memberof typedefs
  */
 
+/** Permissions */
+/**
+ * @exports TUpdateResourcePermissionsRequest
+ * @typedef {import('librechat-data-provider').TUpdateResourcePermissionsRequest} TUpdateResourcePermissionsRequest
+ * @memberof typedefs
+ */
+
+/**
+ * @exports TUpdateResourcePermissionsResponse
+ * @typedef {import('librechat-data-provider').TUpdateResourcePermissionsResponse} TUpdateResourcePermissionsResponse
+ * @memberof typedefs
+ */
+
 /**
  * @exports JsonSchemaType
  * @typedef {import('@librechat/api').JsonSchemaType} JsonSchemaType
@@ -1093,6 +1112,18 @@
 /**
  * @exports MCPManager
  * @typedef {import('@librechat/api').MCPManager} MCPManager
+ * @memberof typedefs
+ */
+
+/**
+ * @exports MCPConnection
+ * @typedef {import('@librechat/api').MCPConnection} MCPConnection
+ * @memberof typedefs
+ */
+
+/**
+ * @exports LCFunctionTool
+ * @typedef {import('@librechat/api').LCFunctionTool} LCFunctionTool
  * @memberof typedefs
  */
 
@@ -1806,6 +1837,7 @@
  * @param {object} opts - Options for the completion
  * @param {onTokenProgress} opts.onProgress - Callback function to handle token progress
  * @param {AbortController} opts.abortController - AbortController instance
+ * @param {Record<string, Record<string, string>>} [opts.userMCPAuthMap]
  * @returns {Promise<string>}
  * @memberof typedefs
  */
