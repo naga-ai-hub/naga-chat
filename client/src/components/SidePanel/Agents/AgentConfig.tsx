@@ -12,23 +12,24 @@ import {
   getIconKey,
   cn,
 } from '~/utils';
-import { useFileMapContext, useAgentPanelContext } from '~/Providers';
+import { ToolSelectDialog, MCPToolSelectDialog } from '~/components/Tools';
 import useAgentCapabilities from '~/hooks/Agents/useAgentCapabilities';
+import { useFileMapContext, useAgentPanelContext } from '~/Providers';
 import AgentCategorySelector from './AgentCategorySelector';
 import Action from '~/components/SidePanel/Builder/Action';
-import { ToolSelectDialog } from '~/components/Tools';
+import { useLocalize, useVisibleTools } from '~/hooks';
+import { Panel, isEphemeralAgent } from '~/common';
 import { useGetAgentFiles } from '~/data-provider';
 import { icons } from '~/hooks/Endpoint/Icons';
 import Instructions from './Instructions';
 import AgentAvatar from './AgentAvatar';
 import FileContext from './FileContext';
 import SearchForm from './Search/Form';
-import { useLocalize } from '~/hooks';
 import FileSearch from './FileSearch';
 import Artifacts from './Artifacts';
 import AgentTool from './AgentTool';
 import CodeForm from './Code/Form';
-import { Panel } from '~/common';
+import MCPTools from './MCPTools';
 
 const labelClass = 'mb-2 text-token-text-primary block font-medium';
 const inputClass = cn(
@@ -43,13 +44,16 @@ export default function AgentConfig({ createMutation }: Pick<AgentPanelProps, 'c
   const { showToast } = useToastContext();
   const methods = useFormContext<AgentForm>();
   const [showToolDialog, setShowToolDialog] = useState(false);
+  const [showMCPToolDialog, setShowMCPToolDialog] = useState(false);
   const {
     actions,
     setAction,
+    regularTools,
     agentsConfig,
+    startupConfig,
+    mcpServersMap,
     setActivePanel,
     endpointsConfig,
-    groupedTools: allTools,
   } = useAgentPanelContext();
 
   const {
@@ -75,9 +79,9 @@ export default function AgentConfig({ createMutation }: Pick<AgentPanelProps, 'c
   }, [fileMap, agentFiles]);
 
   const {
-    ocrEnabled,
     codeEnabled,
     toolsEnabled,
+    contextEnabled,
     actionsEnabled,
     artifactsEnabled,
     webSearchEnabled,
@@ -145,7 +149,7 @@ export default function AgentConfig({ createMutation }: Pick<AgentPanelProps, 'c
   }, [agent, agent_id, mergedFileMap]);
 
   const handleAddActions = useCallback(() => {
-    if (!agent_id) {
+    if (isEphemeralAgent(agent_id)) {
       showToast({
         message: localize('com_assistants_actions_disabled'),
         status: 'warning',
@@ -173,19 +177,7 @@ export default function AgentConfig({ createMutation }: Pick<AgentPanelProps, 'c
     Icon = icons[iconKey];
   }
 
-  // Determine what to show
-  const selectedToolIds = tools ?? [];
-  const visibleToolIds = new Set(selectedToolIds);
-
-  // Check what group parent tools should be shown if any subtool is present
-  Object.entries(allTools ?? {}).forEach(([toolId, toolObj]) => {
-    if (toolObj.tools?.length) {
-      // if any subtool of this group is selected, ensure group parent tool rendered
-      if (toolObj.tools.some((st) => selectedToolIds.includes(st.tool_id))) {
-        visibleToolIds.add(toolId);
-      }
-    }
-  });
+  const { toolIds, mcpServerNames } = useVisibleTools(tools, regularTools, mcpServersMap);
 
   return (
     <>
@@ -299,7 +291,7 @@ export default function AgentConfig({ createMutation }: Pick<AgentPanelProps, 'c
         {(codeEnabled ||
           fileSearchEnabled ||
           artifactsEnabled ||
-          ocrEnabled ||
+          contextEnabled ||
           webSearchEnabled) && (
           <div className="mb-4 flex w-full flex-col items-start gap-3">
             <label className="text-token-text-primary block font-medium">
@@ -309,13 +301,21 @@ export default function AgentConfig({ createMutation }: Pick<AgentPanelProps, 'c
             {codeEnabled && <CodeForm agent_id={agent_id} files={code_files} />}
             {/* Web Search */}
             {webSearchEnabled && <SearchForm />}
-            {/* File Context (OCR) */}
-            {ocrEnabled && <FileContext agent_id={agent_id} files={context_files} />}
+            {/* File Context */}
+            {contextEnabled && <FileContext agent_id={agent_id} files={context_files} />}
             {/* Artifacts */}
             {artifactsEnabled && <Artifacts />}
             {/* File Search */}
             {fileSearchEnabled && <FileSearch agent_id={agent_id} files={knowledge_files} />}
           </div>
+        )}
+        {/* MCP Section */}
+        {startupConfig?.mcpServers != null && (
+          <MCPTools
+            agentId={agent_id}
+            mcpServerNames={mcpServerNames}
+            setShowMCPToolDialog={setShowMCPToolDialog}
+          />
         )}
         {/* Agent Tools & Actions */}
         <div className="mb-4">
@@ -326,16 +326,15 @@ export default function AgentConfig({ createMutation }: Pick<AgentPanelProps, 'c
           </label>
           <div>
             <div className="mb-1">
-              {/* // Render all visible IDs (including groups with subtools selected) */}
-              {[...visibleToolIds].map((toolId, i) => {
-                if (!allTools) return null;
-                const tool = allTools[toolId];
+              {/* Render all visible IDs */}
+              {toolIds.map((toolId, i) => {
+                const tool = regularTools?.find((t) => t.pluginKey === toolId);
                 if (!tool) return null;
                 return (
                   <AgentTool
                     key={`${toolId}-${i}-${agent_id}`}
                     tool={toolId}
-                    allTools={allTools}
+                    regularTools={regularTools}
                     agent_id={agent_id}
                   />
                 );
@@ -371,7 +370,7 @@ export default function AgentConfig({ createMutation }: Pick<AgentPanelProps, 'c
               {(actionsEnabled ?? false) && (
                 <button
                   type="button"
-                  disabled={!agent_id}
+                  disabled={isEphemeralAgent(agent_id)}
                   onClick={handleAddActions}
                   className="btn btn-neutral border-token-border-light relative h-9 w-full rounded-lg font-medium"
                   aria-haspopup="dialog"
@@ -384,9 +383,6 @@ export default function AgentConfig({ createMutation }: Pick<AgentPanelProps, 'c
             </div>
           </div>
         </div>
-        {/* MCP Section */}
-        {/* <MCPSection /> */}
-
         {/* Support Contact (Optional) */}
         <div className="mb-4">
           <div className="mb-1.5 flex items-center gap-2">
@@ -477,6 +473,15 @@ export default function AgentConfig({ createMutation }: Pick<AgentPanelProps, 'c
         setIsOpen={setShowToolDialog}
         endpoint={EModelEndpoint.agents}
       />
+      {startupConfig?.mcpServers != null && (
+        <MCPToolSelectDialog
+          agentId={agent_id}
+          isOpen={showMCPToolDialog}
+          mcpServerNames={mcpServerNames}
+          setIsOpen={setShowMCPToolDialog}
+          endpoint={EModelEndpoint.agents}
+        />
+      )}
     </>
   );
 }

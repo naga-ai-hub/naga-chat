@@ -2,9 +2,15 @@ const { z } = require('zod');
 const fs = require('fs').promises;
 const { nanoid } = require('nanoid');
 const { logger } = require('@librechat/data-schemas');
-const { agentCreateSchema, agentUpdateSchema } = require('@librechat/api');
+const {
+  agentCreateSchema,
+  agentUpdateSchema,
+  mergeAgentOcrConversion,
+  convertOcrToContextInPlace,
+} = require('@librechat/api');
 const {
   Tools,
+  Constants,
   SystemRoles,
   FileSources,
   ResourceType,
@@ -65,13 +71,13 @@ const createAgentHandler = async (req, res) => {
     agentData.author = userId;
     agentData.tools = [];
 
-    const availableTools = await getCachedTools({ includeGlobal: true });
+    const availableTools = await getCachedTools();
     for (const tool of tools) {
       if (availableTools[tool]) {
         agentData.tools.push(tool);
-      }
-
-      if (systemTools[tool]) {
+      } else if (systemTools[tool]) {
+        agentData.tools.push(tool);
+      } else if (tool.includes(Constants.mcp_delimiter)) {
         agentData.tools.push(tool);
       }
     }
@@ -197,17 +203,30 @@ const getAgentHandler = async (req, res, expandProperties = false) => {
  * @param {object} req.params - Request params
  * @param {string} req.params.id - Agent identifier.
  * @param {AgentUpdateParams} req.body - The Agent update parameters.
- * @returns {Agent} 200 - success response - application/json
+ * @returns {Promise<Agent>} 200 - success response - application/json
  */
 const updateAgentHandler = async (req, res) => {
   try {
     const id = req.params.id;
     const validatedData = agentUpdateSchema.parse(req.body);
     const { _id, ...updateData } = removeNullishValues(validatedData);
+
+    // Convert OCR to context in incoming updateData
+    convertOcrToContextInPlace(updateData);
+
     const existingAgent = await getAgent({ id });
 
     if (!existingAgent) {
       return res.status(404).json({ error: 'Agent not found' });
+    }
+
+    // Convert legacy OCR tool resource to context format in existing agent
+    const ocrConversion = mergeAgentOcrConversion(existingAgent, updateData);
+    if (ocrConversion.tool_resources) {
+      updateData.tool_resources = ocrConversion.tool_resources;
+    }
+    if (ocrConversion.tools) {
+      updateData.tools = ocrConversion.tools;
     }
 
     let updatedAgent =
@@ -254,7 +273,7 @@ const updateAgentHandler = async (req, res) => {
  * @param {object} req - Express Request
  * @param {object} req.params - Request params
  * @param {string} req.params.id - Agent identifier.
- * @returns {Agent} 201 - success response - application/json
+ * @returns {Promise<Agent>} 201 - success response - application/json
  */
 const duplicateAgentHandler = async (req, res) => {
   const { id } = req.params;
@@ -287,9 +306,19 @@ const duplicateAgentHandler = async (req, res) => {
       hour12: false,
     })})`;
 
+    if (_tool_resources?.[EToolResources.context]) {
+      cloneData.tool_resources = {
+        [EToolResources.context]: _tool_resources[EToolResources.context],
+      };
+    }
+
     if (_tool_resources?.[EToolResources.ocr]) {
       cloneData.tool_resources = {
-        [EToolResources.ocr]: _tool_resources[EToolResources.ocr],
+        /** Legacy conversion from `ocr` to `context` */
+        [EToolResources.context]: {
+          ...(_tool_resources[EToolResources.context] ?? {}),
+          ..._tool_resources[EToolResources.ocr],
+        },
       };
     }
 
@@ -381,7 +410,7 @@ const duplicateAgentHandler = async (req, res) => {
  * @param {object} req - Express Request
  * @param {object} req.params - Request params
  * @param {string} req.params.id - Agent identifier.
- * @returns {Agent} 200 - success response - application/json
+ * @returns {Promise<Agent>} 200 - success response - application/json
  */
 const deleteAgentHandler = async (req, res) => {
   try {
@@ -483,10 +512,11 @@ const getListAgentsHandler = async (req, res) => {
  * @param {Express.Multer.File} req.file - The avatar image file.
  * @param {object} req.body - Request body
  * @param {string} [req.body.avatar] - Optional avatar for the agent's avatar.
- * @returns {Object} 200 - success response - application/json
+ * @returns {Promise<void>} 200 - success response - application/json
  */
 const uploadAgentAvatarHandler = async (req, res) => {
   try {
+    const appConfig = req.config;
     filterFile({ req, file: req.file, image: true, isAvatar: true });
     const { agent_id } = req.params;
     if (!agent_id) {
@@ -510,9 +540,7 @@ const uploadAgentAvatarHandler = async (req, res) => {
     }
 
     const buffer = await fs.readFile(req.file.path);
-
-    const fileStrategy = getFileStrategy(req.app.locals, { isAvatar: true });
-
+    const fileStrategy = getFileStrategy(appConfig, { isAvatar: true });
     const resizedBuffer = await resizeAvatar({
       userId: req.user.id,
       input: buffer,
