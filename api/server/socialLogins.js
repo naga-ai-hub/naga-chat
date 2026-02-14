@@ -1,7 +1,7 @@
 const passport = require('passport');
 const session = require('express-session');
-const { isEnabled } = require('@librechat/api');
 const { CacheKeys } = require('librechat-data-provider');
+const { isEnabled, shouldUseSecureCookie } = require('@librechat/api');
 const { logger, DEFAULT_SESSION_EXPIRY } = require('@librechat/data-schemas');
 const {
   openIdJwtLogin,
@@ -22,7 +22,6 @@ const { getLogStores } = require('~/cache');
  */
 async function configureOpenId(app) {
   logger.info('Configuring OpenID Connect...');
-  const isProduction = process.env.NODE_ENV === 'production';
   const sessionExpiry = Number(process.env.SESSION_EXPIRY) || DEFAULT_SESSION_EXPIRY;
   const sessionOptions = {
     secret: process.env.OPENID_SESSION_SECRET,
@@ -31,7 +30,7 @@ async function configureOpenId(app) {
     store: getLogStores(CacheKeys.OPENID_SESSION),
     cookie: {
       maxAge: sessionExpiry,
-      secure: isProduction,
+      secure: shouldUseSecureCookie(),
     },
   };
   app.use(session(sessionOptions));
@@ -88,7 +87,6 @@ const configureSocialLogins = async (app) => {
     process.env.SAML_SESSION_SECRET
   ) {
     logger.info('Configuring SAML Connect...');
-    const isProduction = process.env.NODE_ENV === 'production';
     const sessionExpiry = Number(process.env.SESSION_EXPIRY) || DEFAULT_SESSION_EXPIRY;
     const sessionOptions = {
       secret: process.env.SAML_SESSION_SECRET,
@@ -97,7 +95,7 @@ const configureSocialLogins = async (app) => {
       store: getLogStores(CacheKeys.SAML_SESSION),
       cookie: {
         maxAge: sessionExpiry,
-        secure: isProduction,
+        secure: shouldUseSecureCookie(),
       },
     };
     app.use(session(sessionOptions));
