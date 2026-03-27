@@ -1,6 +1,6 @@
 {
   "name": "@librechat/backend",
-  "version": "v0.8.3",
+  "version": "v0.8.4",
   "description": "",
   "scripts": {
     "start": "echo 'please run this from the root directory'",
@@ -44,7 +44,7 @@
     "@google/genai": "^1.19.0",
     "@keyv/redis": "^4.3.3",
     "@langchain/core": "^0.3.80",
-    "@librechat/agents": "^3.1.56",
+    "@librechat/agents": "^3.1.62",
     "@librechat/api": "*",
     "@librechat/data-schemas": "*",
     "@microsoft/microsoft-graph-client": "^3.0.7",
@@ -113,6 +113,7 @@
     "winston": "^3.11.0",
     "winston-daily-rotate-file": "^5.0.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "yauzl": "^3.2.1",
     "zod": "^3.22.4"
   },
   "devDependencies": {
