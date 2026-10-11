@@ -1,6 +1,15 @@
 import { useMemo } from 'react';
-import { Blocks, MCPIcon, AttachmentIcon } from '@librechat/client';
-import { Database, Bookmark, Settings2, ArrowRightToLine, MessageSquareQuote } from 'lucide-react';
+import { MCPIcon, AttachmentIcon, OpenAIMinimalIcon } from '@librechat/client';
+import {
+  Bot,
+  Brain,
+  Bookmark,
+  NotebookPen,
+  ScrollText,
+  CalendarClock,
+  ArrowRightToLine,
+  SlidersHorizontal,
+} from 'lucide-react';
 import {
   Permissions,
   EModelEndpoint,
@@ -11,15 +20,22 @@ import {
 } from 'librechat-data-provider';
 import type { TInterfaceConfig, TEndpointsConfig } from 'librechat-data-provider';
 import type { NavLink } from '~/common';
+import {
+  useAgentCapabilities,
+  useMCPServerManager,
+  useGetAgentsConfig,
+  useHasAccess,
+} from '~/hooks';
 import MCPBuilderPanel from '~/components/SidePanel/MCPBuilder/MCPBuilderPanel';
 import AgentPanelSwitch from '~/components/SidePanel/Agents/AgentPanelSwitch';
 import BookmarkPanel from '~/components/SidePanel/Bookmarks/BookmarkPanel';
 import PanelSwitch from '~/components/SidePanel/Builder/PanelSwitch';
+import { SchedulePanel } from '~/components/SidePanel/Schedules';
 import Parameters from '~/components/SidePanel/Parameters/Panel';
 import { MemoryPanel } from '~/components/SidePanel/Memories';
 import FilesPanel from '~/components/SidePanel/Files/Panel';
-import { useHasAccess, useMCPServerManager } from '~/hooks';
 import { PromptsAccordion } from '~/components/Prompts';
+import { SkillsAccordion } from '~/components/Skills';
 
 export default function useSideNavLinks({
   hidePanel,
@@ -40,6 +56,10 @@ export default function useSideNavLinks({
 }) {
   const hasAccessToPrompts = useHasAccess({
     permissionType: PermissionTypes.PROMPTS,
+    permission: Permissions.USE,
+  });
+  const hasAccessToSkills = useHasAccess({
+    permissionType: PermissionTypes.SKILLS,
     permission: Permissions.USE,
   });
   const hasAccessToBookmarks = useHasAccess({
@@ -70,10 +90,33 @@ export default function useSideNavLinks({
     permissionType: PermissionTypes.MCP_SERVERS,
     permission: Permissions.CREATE,
   });
+  const hasAccessToSchedules = useHasAccess({
+    permissionType: PermissionTypes.SCHEDULES,
+    permission: Permissions.USE,
+  });
   const { availableMCPServers } = useMCPServerManager();
+
+  const { agentsConfig } = useGetAgentsConfig({ endpointsConfig });
+  const { skillsEnabled } = useAgentCapabilities(agentsConfig?.capabilities);
 
   const Links = useMemo(() => {
     const links: NavLink[] = [];
+
+    if (
+      endpointsConfig?.[EModelEndpoint.agents] &&
+      hasAccessToAgents &&
+      hasAccessToCreateAgents &&
+      endpointsConfig[EModelEndpoint.agents].disableBuilder !== true
+    ) {
+      links.push({
+        title: 'com_sidepanel_agent_builder',
+        label: '',
+        icon: Bot,
+        id: EModelEndpoint.agents,
+        Component: AgentPanelSwitch,
+      });
+    }
+
     if (
       isAssistantsEndpoint(endpoint) &&
       ((endpoint === EModelEndpoint.assistants &&
@@ -87,24 +130,39 @@ export default function useSideNavLinks({
       links.push({
         title: 'com_sidepanel_assistant_builder',
         label: '',
-        icon: Blocks,
+        icon: OpenAIMinimalIcon,
         id: EModelEndpoint.assistants,
         Component: PanelSwitch,
       });
     }
 
-    if (
-      endpointsConfig?.[EModelEndpoint.agents] &&
-      hasAccessToAgents &&
-      hasAccessToCreateAgents &&
-      endpointsConfig[EModelEndpoint.agents].disableBuilder !== true
-    ) {
+    if (hasAccessToSkills && skillsEnabled) {
       links.push({
-        title: 'com_sidepanel_agent_builder',
+        title: 'com_ui_skills',
         label: '',
-        icon: Blocks,
-        id: EModelEndpoint.agents,
-        Component: AgentPanelSwitch,
+        icon: ScrollText,
+        id: 'skills',
+        Component: SkillsAccordion,
+      });
+    }
+
+    // Scheduled chats are EXPERIMENTAL and default-OFF: the server enables them only
+    // when an admin opts in explicitly, so ABSENT config means disabled here too.
+    // Mirrors getLimits exactly — absent/null/`false` are all off, `true` is on, and the
+    // object form is on unless it sets `use: false`. Any mismatch would show an entry
+    // whose create/run operations the backend rejects.
+    const schedulesConfig = interfaceConfig.schedules;
+    const schedulesEnabled =
+      schedulesConfig != null &&
+      schedulesConfig !== false &&
+      !(typeof schedulesConfig === 'object' && schedulesConfig.use === false);
+    if (hasAccessToSchedules && schedulesEnabled) {
+      links.push({
+        title: 'com_ui_schedules',
+        label: '',
+        icon: CalendarClock,
+        id: 'schedules',
+        Component: SchedulePanel,
       });
     }
 
@@ -112,7 +170,7 @@ export default function useSideNavLinks({
       links.push({
         title: 'com_ui_prompts',
         label: '',
-        icon: MessageSquareQuote,
+        icon: NotebookPen,
         id: 'prompts',
         Component: PromptsAccordion,
       });
@@ -122,24 +180,19 @@ export default function useSideNavLinks({
       links.push({
         title: 'com_ui_memories',
         label: '',
-        icon: Database,
+        icon: Brain,
         id: 'memories',
         Component: MemoryPanel,
       });
     }
 
-    if (
-      interfaceConfig.parameters === true &&
-      isParamEndpoint(endpoint ?? '', endpointType ?? '') === true &&
-      !isAgentsEndpoint(endpoint) &&
-      keyProvided
-    ) {
+    if (hasAccessToBookmarks) {
       links.push({
-        title: 'com_sidepanel_parameters',
+        title: 'com_sidepanel_conversation_tags',
         label: '',
-        icon: Settings2,
-        id: 'parameters',
-        Component: Parameters,
+        icon: Bookmark,
+        id: 'bookmarks',
+        Component: BookmarkPanel,
       });
     }
 
@@ -151,13 +204,18 @@ export default function useSideNavLinks({
       Component: FilesPanel,
     });
 
-    if (hasAccessToBookmarks) {
+    if (
+      interfaceConfig.parameters === true &&
+      isParamEndpoint(endpoint ?? '', endpointType ?? '') === true &&
+      !isAgentsEndpoint(endpoint) &&
+      keyProvided
+    ) {
       links.push({
-        title: 'com_sidepanel_conversation_tags',
+        title: 'com_sidepanel_parameters',
         label: '',
-        icon: Bookmark,
-        id: 'bookmarks',
-        Component: BookmarkPanel,
+        icon: SlidersHorizontal,
+        id: 'parameters',
+        Component: Parameters,
       });
     }
 
@@ -192,8 +250,12 @@ export default function useSideNavLinks({
     hasAccessToAgents,
     hasAccessToCreateAgents,
     hasAccessToPrompts,
+    hasAccessToSkills,
+    skillsEnabled,
     hasAccessToMemories,
     hasAccessToReadMemories,
+    hasAccessToSchedules,
+    interfaceConfig.schedules,
     interfaceConfig.parameters,
     endpointType,
     hasAccessToBookmarks,

@@ -11,6 +11,7 @@ import {
   Progress,
 } from '@librechat/client';
 import type { TUser, TVerify2FARequest } from 'librechat-data-provider';
+import type { Variants } from 'framer-motion';
 import {
   useConfirmTwoFactorMutation,
   useDisableTwoFactorMutation,
@@ -20,11 +21,12 @@ import {
 import { SetupPhase, QRPhase, VerifyPhase, BackupPhase, DisablePhase } from './TwoFactorPhases';
 import { DisableTwoFactorToggle } from './DisableTwoFactorToggle';
 import { useAuthContext, useLocalize } from '~/hooks';
+import { useTwoFactorError } from './errors';
 import store from '~/store';
 
 export type Phase = 'setup' | 'qr' | 'verify' | 'backup' | 'disable';
 
-const phaseVariants = {
+const phaseVariants: Variants = {
   initial: { opacity: 0, scale: 0.95 },
   animate: { opacity: 1, scale: 1, transition: { duration: 0.3, ease: 'easeOut' } },
   exit: { opacity: 0, scale: 0.95, transition: { duration: 0.3, ease: 'easeIn' } },
@@ -35,6 +37,7 @@ const TwoFactorAuthentication: React.FC = () => {
   const { user } = useAuthContext();
   const setUser = useSetRecoilState(store.user);
   const { showToast } = useToastContext();
+  const showError = useTwoFactorError();
   const buttonRef = useRef<HTMLButtonElement>(null);
 
   const [secret, setSecret] = useState<string>('');
@@ -65,8 +68,7 @@ const TwoFactorAuthentication: React.FC = () => {
   const resetState = useCallback(() => {
     if (user?.twoFactorEnabled && otpauthUrl) {
       disable2FAMutate(undefined, {
-        onError: () =>
-          showToast({ message: localize('com_ui_2fa_disable_error'), status: 'error' }),
+        onError: (error) => showError(error, 'com_ui_2fa_disable_error'),
       });
     }
 
@@ -77,7 +79,7 @@ const TwoFactorAuthentication: React.FC = () => {
     setDisableToken('');
     setPhase(user?.twoFactorEnabled ? 'disable' : 'setup');
     setDownloaded(false);
-  }, [user, otpauthUrl, disable2FAMutate, localize, showToast]);
+  }, [user, otpauthUrl, disable2FAMutate, showError]);
 
   const handleGenerateQRCode = useCallback(() => {
     enable2FAMutate(undefined, {
@@ -87,9 +89,9 @@ const TwoFactorAuthentication: React.FC = () => {
         setBackupCodes(backupCodes);
         setPhase('qr');
       },
-      onError: () => showToast({ message: localize('com_ui_2fa_generate_error'), status: 'error' }),
+      onError: (error) => showError(error, 'com_ui_2fa_generate_error'),
     });
-  }, [enable2FAMutate, localize, showToast]);
+  }, [enable2FAMutate, showError]);
 
   const handleVerify = useCallback(() => {
     if (!verificationToken) {
@@ -105,15 +107,14 @@ const TwoFactorAuthentication: React.FC = () => {
             { token: verificationToken },
             {
               onSuccess: () => setPhase('backup'),
-              onError: () =>
-                showToast({ message: localize('com_ui_2fa_invalid'), status: 'error' }),
+              onError: (error) => showError(error, 'com_ui_2fa_invalid'),
             },
           );
         },
-        onError: () => showToast({ message: localize('com_ui_2fa_invalid'), status: 'error' }),
+        onError: (error) => showError(error, 'com_ui_2fa_invalid'),
       },
     );
-  }, [verificationToken, verify2FAMutate, confirm2FAMutate, localize, showToast]);
+  }, [verificationToken, verify2FAMutate, confirm2FAMutate, localize, showToast, showError]);
 
   const handleDownload = useCallback(() => {
     if (!backupCodes.length) {
@@ -183,10 +184,10 @@ const TwoFactorAuthentication: React.FC = () => {
           setPhase('setup');
           setOtpauthUrl('');
         },
-        onError: () => showToast({ message: localize('com_ui_2fa_invalid'), status: 'error' }),
+        onError: (error) => showError(error, 'com_ui_2fa_invalid'),
       });
     },
-    [disable2FAMutate, showToast, localize, setUser],
+    [disable2FAMutate, showToast, localize, setUser, showError],
   );
 
   return (
@@ -220,7 +221,7 @@ const TwoFactorAuthentication: React.FC = () => {
           >
             <OGDialogHeader>
               <OGDialogTitle className="mb-2 flex items-center gap-3 text-2xl font-bold">
-                <SmartphoneIcon className="h-6 w-6 text-primary" aria-hidden="true" />
+                <SmartphoneIcon className="h-6 w-6 text-text-primary" aria-hidden="true" />
                 {user?.twoFactorEnabled
                   ? localize('com_ui_2fa_disable')
                   : localize('com_ui_2fa_setup')}
@@ -237,7 +238,9 @@ const TwoFactorAuthentication: React.FC = () => {
                         key={step}
                         animate={{
                           color:
-                            currentStep >= index ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                            currentStep >= index
+                              ? 'rgb(var(--text-primary))'
+                              : 'rgb(var(--text-tertiary))',
                         }}
                         className="font-medium"
                       >

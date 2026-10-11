@@ -1,22 +1,32 @@
 export enum QueryKeys {
   messages = 'messages',
   sharedMessages = 'sharedMessages',
+  sharedStartupConfig = 'sharedStartupConfig',
   sharedLinks = 'sharedLinks',
   allConversations = 'allConversations',
   archivedConversations = 'archivedConversations',
+  pinnedConversations = 'pinnedConversations',
   searchConversations = 'searchConversations',
   conversation = 'conversation',
   searchEnabled = 'searchEnabled',
+  langfuseConnection = 'langfuseConnection',
+  langfuseSessionLink = 'langfuseSessionLink',
+  conversationTraceAvailability = 'conversationTraceAvailability',
+  conversationTraceRecords = 'conversationTraceRecords',
+  conversationTraceRecord = 'conversationTraceRecord',
   user = 'user',
   name = 'name', // user key name
   models = 'models',
   balance = 'balance',
   endpoints = 'endpoints',
+  tokenConfig = 'tokenConfig',
   presets = 'presets',
   searchResults = 'searchResults',
   tokenCount = 'tokenCount',
   availablePlugins = 'availablePlugins',
   startupConfig = 'startupConfig',
+  insights = 'insights',
+  insightsAccess = 'insightsAccess',
   assistants = 'assistants',
   assistant = 'assistant',
   agents = 'agents',
@@ -34,6 +44,7 @@ export enum QueryKeys {
   assistantDocs = 'assistantDocs',
   agentDocs = 'agentDocs',
   fileDownload = 'fileDownload',
+  filePreview = 'filePreview',
   voices = 'voices',
   customConfigSpeech = 'customConfigSpeech',
   prompts = 'prompts',
@@ -41,6 +52,9 @@ export enum QueryKeys {
   promptGroups = 'promptGroups',
   allPromptGroups = 'allPromptGroups',
   promptGroup = 'promptGroup',
+  projects = 'projects',
+  project = 'project',
+  projectConversations = 'projectConversations',
   categories = 'categories',
   randomPrompts = 'randomPrompts',
   agentCategories = 'agentCategories',
@@ -65,18 +79,55 @@ export enum QueryKeys {
   activeJobs = 'activeJobs',
   /* Agent API Keys */
   agentApiKeys = 'agentApiKeys',
+  /* Skills */
+  skills = 'skills',
+  skill = 'skill',
+  skillFiles = 'skillFiles',
+  skillFileContent = 'skillFileContent',
+  /* Skill tree (phase 2 — filesystem-style node view) */
+  skillTree = 'skillTree',
+  skillNodeContent = 'skillNodeContent',
+  /* Tool favorites (starred marketplace items) */
+  toolFavorites = 'toolFavorites',
+  /* Per-user skill active/inactive overrides */
+  skillStates = 'skillStates',
+  /* General user favorites */
+  favorites = 'favorites',
+  /* Scheduled chats */
+  schedules = 'schedules',
+  schedule = 'schedule',
+  parentSubagents = 'parentSubagents',
+  subagentThread = 'subagentThread',
+  backgroundTasks = 'backgroundTasks',
+  codeEnvironments = 'codeEnvironments',
+  agentQueuedTurns = 'agentQueuedTurns',
+  /* Combined Pinned-section display order (favorites + pinned chats) */
+  pinnedOrder = 'pinnedOrder',
 }
 
 // Dynamic query keys that require parameters
 export const DynamicQueryKeys = {
   agentFiles: (agentId: string) => ['agentFiles', agentId] as const,
+  codeEnvironmentStatus: (id: string) => [QueryKeys.codeEnvironments, id, 'status'] as const,
 } as const;
 
 export enum MutationKeys {
+  subagentControl = 'subagentControl',
+  cancelBackgroundTasks = 'cancelBackgroundTasks',
+  enqueueAgentQueuedTurn = 'enqueueAgentQueuedTurn',
+  cancelAgentQueuedTurn = 'cancelAgentQueuedTurn',
+  /** Whole-array favorites write, keyed so every hook instance's write is
+   *  visible to the others through the query client. */
+  updateFavorites = 'updateFavorites',
+  /** Pinned-section display order write, keyed for the same reason. */
+  updatePinnedOrder = 'updatePinnedOrder',
+  updateLangfuseConnection = 'updateLangfuseConnection',
+  testLangfuseConnection = 'testLangfuseConnection',
   createAgentApiKey = 'createAgentApiKey',
   deleteAgentApiKey = 'deleteAgentApiKey',
   fileUpload = 'fileUpload',
   fileDelete = 'fileDelete',
+  fileUsage = 'fileUsage',
   updatePreset = 'updatePreset',
   deletePreset = 'deletePreset',
   loginUser = 'loginUser',
@@ -93,8 +144,29 @@ export enum MutationKeys {
   deleteAgentAction = 'deleteAgentAction',
   revertAgentVersion = 'revertAgentVersion',
   deleteUser = 'deleteUser',
+  updateUserPreferences = 'updateUserPreferences',
   updateRole = 'updateRole',
   enableTwoFactor = 'enableTwoFactor',
   verifyTwoFactor = 'verifyTwoFactor',
   updateMemoryPreferences = 'updateMemoryPreferences',
+  createProject = 'createProject',
+  updateProject = 'updateProject',
+  deleteProject = 'deleteProject',
+  assignConversationToProject = 'assignConversationToProject',
+  /* Skill mutations from the original UI PR — tree/node operations are
+   * phase 2 and currently stubbed in the data-service layer. */
+  createSkillNode = 'createSkillNode',
+  updateSkillNode = 'updateSkillNode',
+  deleteSkillNode = 'deleteSkillNode',
+  updateSkillNodeContent = 'updateSkillNodeContent',
+  convoPin = 'convoPin',
+  archiveAllConversations = 'archiveAllConversations',
+  createSchedule = 'createSchedule',
+  updateSchedule = 'updateSchedule',
+  deleteSchedule = 'deleteSchedule',
+  runSchedule = 'runSchedule',
+  pairCodeEnvironment = 'pairCodeEnvironment',
+  updateCodeEnvironmentSettings = 'updateCodeEnvironmentSettings',
+  deleteCodeEnvironment = 'deleteCodeEnvironment',
+  moveConversationCodeEnvironment = 'moveConversationCodeEnvironment',
 }

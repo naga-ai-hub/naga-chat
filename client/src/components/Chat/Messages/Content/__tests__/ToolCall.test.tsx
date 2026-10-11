@@ -1,8 +1,10 @@
 import React from 'react';
 import { RecoilRoot } from 'recoil';
-import { Tools, Constants } from 'librechat-data-provider';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { Tools, Constants, dataService } from 'librechat-data-provider';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { ToolAuthWarningContext } from '../auth';
 import ToolCall from '../ToolCall';
+import { logger } from '~/utils';
 
 // Mock dependencies
 jest.mock('~/hooks', () => ({
@@ -13,12 +15,15 @@ jest.mock('~/hooks', () => ({
       com_assistants_completed_action: `Completed action on ${values?.[0]}`,
       com_assistants_running_var: `Running ${values?.[0]}`,
       com_assistants_running_action: 'Running action',
+      com_ui_tool_preparing: `Preparing ${values?.[0]}`,
+      com_ui_tool_calling: `Calling ${values?.[0]}`,
       com_ui_sign_in_to_domain: `Sign in to ${values?.[0]}`,
       com_ui_cancelled: 'Cancelled',
       com_ui_requires_auth: 'Requires authentication',
       com_assistants_allow_sites_you_trust: 'Only allow sites you trust',
       com_ui_via_server: `via ${values?.[0]}`,
       com_ui_tool_failed: 'failed',
+      com_ui_tool_name_set_memory: 'Save Memory',
     };
     return translations[key] || key;
   },
@@ -31,11 +36,16 @@ jest.mock('~/hooks', () => ({
     },
     ref: { current: null },
   }),
+  useLazyCollapseBody: jest.requireActual('~/hooks/Messages/useLazyCollapseBody').default,
 }));
 
-jest.mock('~/hooks/MCP', () => ({
-  useMCPIconMap: () => new Map(),
-}));
+jest.mock('~/hooks/MCP', () => {
+  const mcpServerNames: string[] = [];
+  return {
+    useMCPIconMap: () => new Map(),
+    useMCPServerNames: () => mcpServerNames,
+  };
+});
 
 jest.mock('~/components/Chat/Messages/Content/MessageContent', () => ({
   __esModule: true,
@@ -96,7 +106,22 @@ jest.mock('~/utils', () => ({
     error: jest.fn(),
   },
   cn: (...classes: any[]) => classes.filter(Boolean).join(' '),
+  getToolDisplayLabel: (name: string, localize: (key: string) => string) =>
+    name === 'set_memory' ? localize('com_ui_tool_name_set_memory') : name,
+  openInNewTab: jest.requireActual('~/utils/links').openInNewTab,
 }));
+
+jest.mock('librechat-data-provider', () => {
+  const actual = jest.requireActual('librechat-data-provider');
+  return {
+    ...actual,
+    dataService: {
+      ...actual.dataService,
+      bindMCPOAuth: jest.fn(),
+      bindActionOAuth: jest.fn(),
+    },
+  };
+});
 
 describe('ToolCall', () => {
   const mockProps = {
@@ -113,6 +138,75 @@ describe('ToolCall', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+  describe('tool preparation feedback', () => {
+    it('announces preparation and then execution without calling the tool during argument streaming', () => {
+      const props = {
+        ...mockProps,
+        output: null,
+        initialProgress: 0.1,
+        isSubmitting: true,
+        toolPreparationStartedAt: 1_000,
+      };
+      const { rerender } = renderWithRecoil(<ToolCall {...props} />);
+      expect(screen.getByText('Preparing testFunction')).toBeInTheDocument();
+      rerender(
+        <RecoilRoot>
+          <ToolCall {...props} toolDispatchedAt={4_000} />
+        </RecoilRoot>,
+      );
+      expect(screen.getByText('Calling testFunction')).toBeInTheDocument();
+    });
+  });
+
+  describe('intent label', () => {
+    it('renders a streaming intent as the live label before args are complete', () => {
+      renderWithRecoil(
+        <ToolCall
+          {...mockProps}
+          args={'{"intent":"Searching for OAuth handling in the callbac'}
+          output={null}
+          initialProgress={0.5}
+          isSubmitting={true}
+        />,
+      );
+      expect(
+        screen.getAllByText(/Searching for OAuth handling in the callbac/).length,
+      ).toBeGreaterThan(0);
+      /** The aria-live region keeps its STABLE generic value while the intent
+       *  streams — an atomic polite region would otherwise re-announce the
+       *  whole growing sentence on every delta. */
+      expect(screen.getByText('Running testFunction')).toBeInTheDocument();
+    });
+
+    it('keeps the intent as the settled label instead of the generic completion text', () => {
+      renderWithRecoil(
+        <ToolCall {...mockProps} args={'{"intent":"Looking up the customer record","q":"acme"}'} />,
+      );
+      expect(screen.getAllByText('Looking up the customer record').length).toBeGreaterThan(0);
+      expect(screen.queryByText('Completed testFunction')).not.toBeInTheDocument();
+    });
+
+    it('falls back to the generic labels when args carry no intent', () => {
+      renderWithRecoil(<ToolCall {...mockProps} />);
+      expect(screen.getAllByText('Completed testFunction').length).toBeGreaterThan(0);
+    });
+  });
+
+  it('uses a friendly label for the set_memory tool', () => {
+    renderWithRecoil(<ToolCall {...mockProps} name="set_memory" />);
+
+    expect(screen.getByTestId('progress-text')).toHaveTextContent('Completed Save Memory');
+    expect(screen.queryByText(/set_memory/)).not.toBeInTheDocument();
+  });
+
+  it('keeps expanded tool content close to its header', () => {
+    renderWithRecoil(<ToolCall {...mockProps} />);
+
+    fireEvent.click(screen.getByTestId('progress-text'));
+
+    expect(screen.getByTestId('tool-call-info').parentElement).toHaveClass('mb-2', 'mt-0');
   });
 
   describe('attachments prop passing', () => {
@@ -214,27 +308,58 @@ describe('ToolCall', () => {
 
       expect(screen.queryByTestId('attachment-group')).not.toBeInTheDocument();
     });
+
+    it('should not render AttachmentGroup when hideAttachments is true (grouped path)', () => {
+      const attachments = [
+        {
+          type: Tools.ui_resources,
+          messageId: 'msg-hide',
+          toolCallId: 'tool-hide',
+          conversationId: 'conv-hide',
+          [Tools.ui_resources]: { '0': { type: 'chart', data: [] } },
+        },
+      ];
+
+      renderWithRecoil(
+        <ToolCall {...mockProps} attachments={attachments as any} hideAttachments />,
+      );
+
+      expect(screen.queryByTestId('attachment-group')).not.toBeInTheDocument();
+    });
+
+    it('should render AttachmentGroup when hideAttachments is false explicitly', () => {
+      const attachments = [
+        {
+          type: Tools.ui_resources,
+          messageId: 'msg-show',
+          toolCallId: 'tool-show',
+          conversationId: 'conv-show',
+          [Tools.ui_resources]: { '0': { type: 'chart', data: [] } },
+        },
+      ];
+
+      renderWithRecoil(
+        <ToolCall {...mockProps} attachments={attachments as any} hideAttachments={false} />,
+      );
+
+      expect(screen.getByTestId('attachment-group')).toBeInTheDocument();
+    });
   });
 
   describe('tool call info visibility', () => {
-    it('should toggle tool call info expand/collapse when clicking header', () => {
+    it('should mount tool call info only after expanding via the header', () => {
       renderWithRecoil(<ToolCall {...mockProps} />);
 
-      // ToolCallInfo is always in the DOM (CSS expand/collapse), but initially collapsed
-      const toolCallInfo = screen.getByTestId('tool-call-info');
-      expect(toolCallInfo).toBeInTheDocument();
+      // Collapsed info stays unmounted until the first expansion
+      expect(screen.queryByTestId('tool-call-info')).not.toBeInTheDocument();
 
-      // The expand wrapper starts collapsed (showInfo=false, autoExpand=false)
-      const expandWrapper = toolCallInfo.closest('[style]')?.parentElement;
-      expect(expandWrapper).toBeDefined();
-
-      // Click to expand
       fireEvent.click(screen.getByTestId('progress-text'));
       expect(screen.getByTestId('tool-call-info')).toBeInTheDocument();
     });
 
     it('should pass input and output props to ToolCallInfo', () => {
       renderWithRecoil(<ToolCall {...mockProps} />);
+      fireEvent.click(screen.getByTestId('progress-text'));
 
       const toolCallInfo = screen.getByTestId('tool-call-info');
       const props = JSON.parse(toolCallInfo.textContent!);
@@ -246,8 +371,10 @@ describe('ToolCall', () => {
 
   describe('authentication flow', () => {
     it('should show sign-in button when auth URL is provided', () => {
-      const originalOpen = window.open;
-      window.open = jest.fn();
+      const open = jest.spyOn(window, 'open').mockImplementation(() => null);
+      const click = jest
+        .spyOn(HTMLAnchorElement.prototype, 'click')
+        .mockImplementation(() => undefined);
 
       renderWithRecoil(
         <ToolCall
@@ -262,13 +389,122 @@ describe('ToolCall', () => {
       expect(signInButton).toBeInTheDocument();
 
       fireEvent.click(signInButton);
-      expect(window.open).toHaveBeenCalledWith(
-        'https://auth.example.com',
-        '_blank',
-        'noopener,noreferrer',
-      );
+      expect(click).toHaveBeenCalledTimes(1);
+      const link = click.mock.instances[0] as unknown as HTMLAnchorElement;
+      expect(link.href).toBe('https://auth.example.com/');
+      expect(link.target).toBe('_blank');
+      expect(link.rel).toBe('noopener noreferrer');
+      /** A features string makes WebKit request a popup window, which iOS web apps cannot open. */
+      expect(open).not.toHaveBeenCalled();
 
-      window.open = originalOpen;
+      click.mockRestore();
+      open.mockRestore();
+    });
+
+    describe('MCP sign-in', () => {
+      const callbackUrl = 'https://chat.example.com/api/mcp/clickhouse/oauth/callback';
+      const mcpAuth = `https://mcp.example.com/authorize?redirect_uri=${encodeURIComponent(callbackUrl)}`;
+      const mcpProps = {
+        ...mockProps,
+        name: `oauth${Constants.mcp_delimiter}clickhouse`,
+        auth: mcpAuth,
+        initialProgress: 0.5,
+        isSubmitting: true,
+      };
+      let click: jest.SpyInstance;
+
+      beforeEach(() => {
+        click = jest
+          .spyOn(HTMLAnchorElement.prototype, 'click')
+          .mockImplementation(() => undefined);
+      });
+
+      afterEach(() => {
+        click.mockRestore();
+      });
+
+      const signInButton = () => screen.getByRole('button', { name: 'Sign in to mcp.example.com' });
+
+      it('binds when the prompt appears and opens the provider within the tap', async () => {
+        (dataService.bindMCPOAuth as jest.Mock).mockResolvedValue({ success: true });
+        renderWithRecoil(<ToolCall {...mcpProps} />);
+        expect(dataService.bindMCPOAuth).toHaveBeenCalledWith('clickhouse');
+        await waitFor(() => expect(signInButton()).toBeEnabled());
+
+        fireEvent.click(signInButton());
+
+        expect(click).toHaveBeenCalledTimes(1);
+        expect((click.mock.instances[0] as unknown as HTMLAnchorElement).href).toBe(mcpAuth);
+        expect(dataService.bindMCPOAuth).toHaveBeenCalledTimes(2);
+        expect(dataService.bindMCPOAuth).toHaveBeenLastCalledWith('clickhouse');
+      });
+
+      it('claims the shared CSRF binding for the prompt the user taps', async () => {
+        (dataService.bindMCPOAuth as jest.Mock).mockResolvedValue({ success: true });
+        const notionCallback = 'https://chat.example.com/api/mcp/notion/oauth/callback';
+        const notionAuth = `https://notion.example.com/authorize?redirect_uri=${encodeURIComponent(notionCallback)}`;
+        const notionButton = () =>
+          screen.getByRole('button', { name: 'Sign in to notion.example.com' });
+        renderWithRecoil(
+          <>
+            <ToolCall {...mcpProps} />
+            <ToolCall
+              {...mcpProps}
+              name={`oauth${Constants.mcp_delimiter}notion`}
+              auth={notionAuth}
+            />
+          </>,
+        );
+        await waitFor(() => expect(signInButton()).toBeEnabled());
+        await waitFor(() => expect(notionButton()).toBeEnabled());
+        expect(dataService.bindMCPOAuth).toHaveBeenLastCalledWith('notion');
+
+        fireEvent.click(signInButton());
+
+        expect(click).toHaveBeenCalledTimes(1);
+        expect((click.mock.instances[0] as unknown as HTMLAnchorElement).href).toBe(mcpAuth);
+        expect(dataService.bindMCPOAuth).toHaveBeenLastCalledWith('clickhouse');
+      });
+
+      it('keeps sign-in disabled until the bind lands', async () => {
+        let finishBind: (() => void) | undefined;
+        (dataService.bindMCPOAuth as jest.Mock).mockReturnValue(
+          new Promise((resolve) => {
+            finishBind = () => resolve({ success: true });
+          }),
+        );
+        renderWithRecoil(<ToolCall {...mcpProps} />);
+
+        expect(signInButton()).toBeDisabled();
+        expect(signInButton()).toHaveAttribute('aria-busy', 'true');
+        fireEvent.click(signInButton());
+        expect(click).not.toHaveBeenCalled();
+
+        finishBind!();
+        await waitFor(() => expect(signInButton()).toBeEnabled());
+        fireEvent.click(signInButton());
+        expect(click).toHaveBeenCalledTimes(1);
+      });
+
+      it('retries a failed bind on tap instead of opening the provider', async () => {
+        (dataService.bindMCPOAuth as jest.Mock)
+          .mockRejectedValueOnce(new Error('bind failed'))
+          .mockResolvedValue({ success: true });
+        renderWithRecoil(<ToolCall {...mcpProps} />);
+        await waitFor(() => expect(logger.error).toHaveBeenCalled());
+        await waitFor(() => expect(signInButton()).toBeEnabled());
+
+        fireEvent.click(signInButton());
+
+        expect(click).not.toHaveBeenCalled();
+        expect(screen.getByRole('alert')).toHaveTextContent('com_ui_oauth_error_generic');
+        await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+        expect(dataService.bindMCPOAuth).toHaveBeenCalledTimes(2);
+        await waitFor(() => expect(signInButton()).toBeEnabled());
+
+        fireEvent.click(signInButton());
+        expect(click).toHaveBeenCalledTimes(1);
+      });
     });
 
     it('should not show auth section when cancelled', () => {
@@ -301,6 +537,7 @@ describe('ToolCall', () => {
   describe('edge cases', () => {
     it('should handle undefined args', () => {
       renderWithRecoil(<ToolCall {...mockProps} args={undefined as any} />);
+      fireEvent.click(screen.getByTestId('progress-text'));
 
       const toolCallInfo = screen.getByTestId('tool-call-info');
       const props = JSON.parse(toolCallInfo.textContent!);
@@ -309,6 +546,7 @@ describe('ToolCall', () => {
 
     it('should handle null output', () => {
       renderWithRecoil(<ToolCall {...mockProps} output={null} />);
+      fireEvent.click(screen.getByTestId('progress-text'));
 
       const toolCallInfo = screen.getByTestId('tool-call-info');
       const props = JSON.parse(toolCallInfo.textContent!);
@@ -317,9 +555,9 @@ describe('ToolCall', () => {
 
     it('should handle simple function name without domain', () => {
       renderWithRecoil(<ToolCall {...mockProps} name="simpleName" />);
+      fireEvent.click(screen.getByTestId('progress-text'));
 
-      const toolCallInfo = screen.getByTestId('tool-call-info');
-      expect(toolCallInfo).toBeInTheDocument();
+      expect(screen.getByTestId('tool-call-info')).toBeInTheDocument();
     });
 
     it('should handle complex nested attachments', () => {
@@ -359,6 +597,42 @@ describe('ToolCall', () => {
 
   describe('MCP OAuth detection', () => {
     const d = Constants.mcp_delimiter;
+
+    it('shows the trust warning for an ungrouped authentication call', () => {
+      renderWithRecoil(
+        <ToolCall
+          {...mockProps}
+          initialProgress={0.5}
+          isSubmitting={true}
+          output=""
+          auth="https://auth.example.com"
+        />,
+      );
+
+      expect(
+        screen.getByRole('button', { name: 'Sign in to auth.example.com' }),
+      ).toBeInTheDocument();
+      expect(screen.getByText('Only allow sites you trust')).toBeInTheDocument();
+    });
+
+    it('keeps the sign-in action while a group suppresses the repeated warning', () => {
+      renderWithRecoil(
+        <ToolAuthWarningContext.Provider value>
+          <ToolCall
+            {...mockProps}
+            initialProgress={0.5}
+            isSubmitting={true}
+            output=""
+            auth="https://auth.example.com"
+          />
+        </ToolAuthWarningContext.Provider>,
+      );
+
+      expect(
+        screen.getByRole('button', { name: 'Sign in to auth.example.com' }),
+      ).toBeInTheDocument();
+      expect(screen.queryByText('Only allow sites you trust')).not.toBeInTheDocument();
+    });
 
     it('should detect MCP OAuth from delimiter in tool-call name', () => {
       renderWithRecoil(
@@ -508,5 +782,24 @@ describe('ToolCall', () => {
       expect(liveRegion).not.toBeNull();
       expect(liveRegion!.className).toContain('sr-only');
     });
+  });
+});
+
+describe('ToolCall failure fast path', () => {
+  const failedProps = {
+    args: '{"url":"https://x"}',
+    name: 'fetch_page',
+    output: 'Error: tool call failed: HTTP 429 from github.com\nretry after 60',
+    initialProgress: 1,
+    isSubmitting: false,
+  };
+
+  it('spends the subtitle on the first line of the error', () => {
+    render(
+      <RecoilRoot>
+        <ToolCall {...failedProps} />
+      </RecoilRoot>,
+    );
+    expect(screen.getByTestId('subtitle')).toHaveTextContent('HTTP 429 from github.com');
   });
 });

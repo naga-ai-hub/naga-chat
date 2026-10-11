@@ -37,7 +37,7 @@ const DeleteConfirmDialog = ({
                 e.stopPropagation();
               }}
             >
-              <Trash2 className="size-4" aria-hidden="true" />
+              <Trash2 className="size-5" aria-hidden="true" />
             </Button>
           }
         />
@@ -58,7 +58,7 @@ const DeleteConfirmDialog = ({
         selection={{
           selectHandler,
           selectClasses:
-            'bg-surface-destructive hover:bg-surface-destructive-hover transition-colors duration-200 text-white',
+            'bg-surface-destructive hover:bg-surface-destructive-hover transition-colors duration-200 text-text-on-status',
           selectText: localize('com_ui_delete'),
         }}
       />

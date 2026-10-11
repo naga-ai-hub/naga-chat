@@ -1,6 +1,8 @@
-import { useEffect, useCallback, useRef } from 'react';
+import { useEffect, useCallback } from 'react';
 import { useAtom } from 'jotai';
 import { useToastContext } from '@librechat/client';
+import { useIsMutating } from '@tanstack/react-query';
+import { MutationKeys } from 'librechat-data-provider';
 import type { Favorite } from '~/store/favorites';
 import { useGetFavoritesQuery, useUpdateFavoritesMutation } from '~/data-provider';
 import { favoritesAtom } from '~/store';
@@ -11,33 +13,39 @@ import { logger } from '~/utils';
 const MAX_FAVORITES = 50;
 
 /**
- * Hook for managing user favorites (pinned agents and models).
+ * Hook for managing user favorites (pinned agents, models, and model specs).
  *
  * Favorites are synchronized with the server via `/api/user/settings/favorites`.
  * Each favorite is either:
  * - An agent: `{ agentId: string }`
  * - A model: `{ model: string, endpoint: string }`
+ * - A model spec: `{ spec: string }`
  *
  * @returns Object containing favorites state and helper methods for
  * adding, removing, toggling, reordering, and checking favorites.
  */
 
 /**
- * Cleans favorites array to only include canonical shapes (agentId or model+endpoint).
+ * Cleans favorites array to only include canonical shapes (agentId, model+endpoint, or spec).
  */
 const cleanFavorites = (favorites: Favorite[]): Favorite[] => {
   if (!Array.isArray(favorites)) {
     return [];
   }
-  return favorites.map((f) => {
-    if (f.agentId) {
-      return { agentId: f.agentId };
-    }
-    if (f.model && f.endpoint) {
-      return { model: f.model, endpoint: f.endpoint };
-    }
-    return f;
-  });
+  return favorites
+    .map((f) => {
+      if (f.agentId) {
+        return { agentId: f.agentId };
+      }
+      if (f.model && f.endpoint) {
+        return { model: f.model, endpoint: f.endpoint };
+      }
+      if (f.spec) {
+        return { spec: f.spec };
+      }
+      return null;
+    })
+    .filter((f): f is NonNullable<typeof f> => f !== null);
 };
 
 export default function useFavorites() {
@@ -47,12 +55,10 @@ export default function useFavorites() {
   const getFavoritesQuery = useGetFavoritesQuery();
   const updateFavoritesMutation = useUpdateFavoritesMutation();
 
-  const isMutatingRef = useRef(false);
+  const writesInFlight = useIsMutating([MutationKeys.updateFavorites]);
 
   useEffect(() => {
-    // Skip updating local state if a mutation is in progress or just completed
-    // The local state is already optimistically updated by saveFavorites
-    if (isMutatingRef.current || updateFavoritesMutation.isLoading) {
+    if (writesInFlight > 0) {
       return;
     }
     if (getFavoritesQuery.data) {
@@ -62,7 +68,7 @@ export default function useFavorites() {
         setFavorites([]);
       }
     }
-  }, [getFavoritesQuery.data, setFavorites, updateFavoritesMutation.isLoading]);
+  }, [getFavoritesQuery.data, setFavorites, writesInFlight]);
 
   const getErrorMessage = useCallback(
     (error: unknown): string => {
@@ -85,20 +91,12 @@ export default function useFavorites() {
     async (newFavorites: typeof favorites) => {
       const cleaned = cleanFavorites(newFavorites);
       setFavorites(cleaned);
-      isMutatingRef.current = true;
       try {
         await updateFavoritesMutation.mutateAsync(cleaned);
       } catch (error) {
         logger.error('Error updating favorites:', error);
         showToast({ message: getErrorMessage(error), status: 'error' });
-        // Refetch to resync state with server
-        getFavoritesQuery.refetch();
-      } finally {
-        // Use a small delay to prevent the useEffect from triggering immediately
-        // after the mutation completes but before React has finished processing
-        setTimeout(() => {
-          isMutatingRef.current = false;
-        }, 100);
+        void getFavoritesQuery.refetch();
       }
     },
     [setFavorites, updateFavoritesMutation, showToast, getErrorMessage, getFavoritesQuery],
@@ -137,6 +135,34 @@ export default function useFavorites() {
     return favorites.some((f) => f.model === model && f.endpoint === endpoint);
   };
 
+  const addFavoriteSpec = (spec: string) => {
+    if (favorites.some((f) => f.spec === spec)) {
+      return;
+    }
+    const newFavorites = [...favorites, { spec }];
+    saveFavorites(newFavorites);
+  };
+
+  const removeFavoriteSpec = (spec: string) => {
+    const newFavorites = favorites.filter((f) => f.spec !== spec);
+    saveFavorites(newFavorites);
+  };
+
+  const isFavoriteSpec = (spec: string | undefined | null) => {
+    if (!spec) {
+      return false;
+    }
+    return favorites.some((f) => f.spec === spec);
+  };
+
+  const toggleFavoriteSpec = (spec: string) => {
+    if (isFavoriteSpec(spec)) {
+      removeFavoriteSpec(spec);
+    } else {
+      addFavoriteSpec(spec);
+    }
+  };
+
   const toggleFavoriteAgent = (agentId: string) => {
     if (isFavoriteAgent(agentId)) {
       removeFavoriteAgent(agentId);
@@ -160,25 +186,13 @@ export default function useFavorites() {
    */
   const reorderFavorites = useCallback(
     async (newFavorites: typeof favorites, persist = false) => {
-      const cleaned = cleanFavorites(newFavorites);
-      setFavorites(cleaned);
       if (persist) {
-        isMutatingRef.current = true;
-        try {
-          await updateFavoritesMutation.mutateAsync(cleaned);
-        } catch (error) {
-          logger.error('Error reordering favorites:', error);
-          showToast({ message: getErrorMessage(error), status: 'error' });
-          // Refetch to resync state with server
-          getFavoritesQuery.refetch();
-        } finally {
-          setTimeout(() => {
-            isMutatingRef.current = false;
-          }, 100);
-        }
+        await saveFavorites(newFavorites);
+      } else {
+        setFavorites(cleanFavorites(newFavorites));
       }
     },
-    [setFavorites, updateFavoritesMutation, showToast, getErrorMessage, getFavoritesQuery],
+    [setFavorites, saveFavorites],
   );
 
   return {
@@ -187,13 +201,31 @@ export default function useFavorites() {
     removeFavoriteAgent,
     addFavoriteModel,
     removeFavoriteModel,
+    addFavoriteSpec,
+    removeFavoriteSpec,
     isFavoriteAgent,
     isFavoriteModel,
+    isFavoriteSpec,
     toggleFavoriteAgent,
     toggleFavoriteModel,
+    toggleFavoriteSpec,
     reorderFavorites,
     /** Whether the favorites query is currently loading */
     isLoading: getFavoritesQuery.isLoading,
+    /** Whether the favorites list was actually retrieved. Not the inverse of
+     *  `isLoading`: an exhausted retry leaves loading false with no data. */
+    isSuccess: getFavoritesQuery.isSuccess,
+    /** Ready for membership-based pruning only after the atom absorbs the
+     *  settled query value, including a rollback with structurally shared data. */
+    isLoaded:
+      getFavoritesQuery.isSuccess &&
+      writesInFlight === 0 &&
+      !getFavoritesQuery.isFetching &&
+      favorites === getFavoritesQuery.data,
+    /** True while the list is being refetched, including the refetch that
+     *  recovers from a failed write. */
+    isFetching: getFavoritesQuery.isFetching,
+    dataUpdatedAt: getFavoritesQuery.dataUpdatedAt,
     /** Whether there was an error fetching favorites */
     isError: getFavoritesQuery.isError,
     /** Whether the update mutation is in progress */

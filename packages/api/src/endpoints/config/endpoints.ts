@@ -1,25 +1,33 @@
 import {
+  AuthType,
+  CODE_APPROVAL_MODES,
   EModelEndpoint,
   isAgentsEndpoint,
   orderEndpointsConfig,
   defaultAgentCapabilities,
 } from 'librechat-data-provider';
-import type { AppConfig } from '@librechat/data-schemas';
 import type { AgentCapabilities, TEndpointsConfig, TConfig } from 'librechat-data-provider';
+import type { AppConfig } from '@librechat/data-schemas';
 import type { ServerRequest, TCustomEndpointsConfig } from '~/types';
+import type { GetAppConfigOptions } from '~/app/service';
 import { loadCustomEndpointsConfig as defaultLoadCustomEndpoints } from '~/endpoints/custom';
+import { getAppConfigOptionsFromUser } from '~/app/service';
+import { getResponsesApiRouting } from './responses';
 
-type PartialEndpointEntry = Partial<TConfig>;
+type PartialEndpointEntry = Partial<TConfig> & Record<string, unknown>;
 type DefaultEndpointsResult = Record<string, PartialEndpointEntry | false | null>;
 type MutableEndpointsConfig = Record<string, PartialEndpointEntry | false | null | undefined>;
 
 export interface EndpointsConfigDeps {
-  getAppConfig: (params: { role?: string | null; tenantId?: string }) => Promise<AppConfig>;
+  getAppConfig: (params: GetAppConfigOptions) => Promise<AppConfig>;
   loadDefaultEndpointsConfig: (appConfig: AppConfig) => Promise<DefaultEndpointsResult>;
   loadCustomEndpointsConfig?: (custom: unknown) => TCustomEndpointsConfig | undefined;
 }
 
-export function createEndpointsConfigService(deps: EndpointsConfigDeps) {
+export function createEndpointsConfigService(deps: EndpointsConfigDeps): {
+  getEndpointsConfig: (req: ServerRequest) => Promise<TEndpointsConfig>;
+  checkCapability: (req: ServerRequest, capability: AgentCapabilities) => Promise<boolean>;
+} {
   const {
     getAppConfig,
     loadDefaultEndpointsConfig,
@@ -27,8 +35,7 @@ export function createEndpointsConfigService(deps: EndpointsConfigDeps) {
   } = deps;
 
   async function getEndpointsConfig(req: ServerRequest): Promise<TEndpointsConfig> {
-    const appConfig =
-      req.config ?? (await getAppConfig({ role: req.user?.role, tenantId: req.user?.tenantId }));
+    const appConfig = req.config ?? (await getAppConfig(getAppConfigOptionsFromUser(req.user)));
     const defaultEndpointsConfig = await loadDefaultEndpointsConfig(appConfig);
     const customEndpointsConfig = loadCustomEndpointsConfig(appConfig?.endpoints?.custom);
 
@@ -39,6 +46,15 @@ export function createEndpointsConfigService(deps: EndpointsConfigDeps) {
 
     if (appConfig.endpoints?.[EModelEndpoint.azureOpenAI]) {
       mergedConfig[EModelEndpoint.azureOpenAI] = { userProvide: false };
+    }
+
+    for (const endpoint of [EModelEndpoint.openAI, EModelEndpoint.azureOpenAI] as const) {
+      const entry = mergedConfig[endpoint];
+      if (entry)
+        mergedConfig[endpoint] = {
+          ...entry,
+          responsesApiRouting: getResponsesApiRouting(appConfig, endpoint),
+        };
     }
 
     if (appConfig.endpoints?.[EModelEndpoint.anthropic]?.vertexConfig?.enabled) {
@@ -65,13 +81,56 @@ export function createEndpointsConfigService(deps: EndpointsConfigDeps) {
     }
 
     if (mergedConfig[EModelEndpoint.agents] && appConfig?.endpoints?.[EModelEndpoint.agents]) {
-      const { disableBuilder, capabilities, allowedProviders } =
-        appConfig.endpoints[EModelEndpoint.agents];
+      const {
+        disableBuilder,
+        capabilities,
+        allowedProviders,
+        statefulCodeSessions,
+        maxSubagents,
+        fileSharing,
+      } = appConfig.endpoints[EModelEndpoint.agents];
+      const toolApproval = appConfig.endpoints[EModelEndpoint.agents].toolApproval;
+      /** Only advertise Accept edits when the endpoint fallback cannot force every
+       * unmatched tool back to Ask/Deny. Explicit rules and hooks remain free to
+       * tighten individual actions after the user selects the broader mode. */
+      let approvalModes = [...CODE_APPROVAL_MODES];
+      if (toolApproval?.enabled === false) {
+        approvalModes = [];
+      } else if (toolApproval?.enabled === true && toolApproval.mode !== 'bypass') {
+        approvalModes = ['ask'];
+      }
+      const clientStatefulCodeSessions = statefulCodeSessions
+        ? {
+            allowedEnvironments: statefulCodeSessions.allowedEnvironments,
+            approvalsEnabled: toolApproval?.enabled !== false,
+            approvalModes,
+            environments: statefulCodeSessions.environments
+              ?.filter(
+                (environment) =>
+                  !(
+                    environment.pairing?.allowPrincipalWorkers === true &&
+                    environment.pairing.workerId == null &&
+                    environment.workerId == null
+                  ),
+              )
+              .map(({ id, name, type, default: isDefault, configSchema, settings }) => ({
+                id,
+                name,
+                type,
+                default: isDefault,
+                configSchema,
+                settings,
+              })),
+          }
+        : undefined;
       mergedConfig[EModelEndpoint.agents] = {
         ...mergedConfig[EModelEndpoint.agents],
         allowedProviders,
         disableBuilder,
         capabilities,
+        statefulCodeSessions: clientStatefulCodeSessions,
+        maxSubagents,
+        fileSharing,
       };
     }
 
@@ -97,6 +156,17 @@ export function createEndpointsConfigService(deps: EndpointsConfigDeps) {
       mergedConfig[EModelEndpoint.bedrock] = {
         ...mergedConfig[EModelEndpoint.bedrock],
         availableRegions,
+      };
+    }
+
+    if (mergedConfig[EModelEndpoint.bedrock]) {
+      mergedConfig[EModelEndpoint.bedrock] = {
+        ...mergedConfig[EModelEndpoint.bedrock],
+        userProvideAccessKeyId: process.env.BEDROCK_AWS_ACCESS_KEY_ID === AuthType.USER_PROVIDED,
+        userProvideSecretAccessKey:
+          process.env.BEDROCK_AWS_SECRET_ACCESS_KEY === AuthType.USER_PROVIDED,
+        userProvideSessionToken: process.env.BEDROCK_AWS_SESSION_TOKEN === AuthType.USER_PROVIDED,
+        userProvideBearerToken: process.env.BEDROCK_AWS_BEARER_TOKEN === AuthType.USER_PROVIDED,
       };
     }
 

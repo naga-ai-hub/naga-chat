@@ -1,60 +1,71 @@
-import { useCallback, useEffect, useState, useMemo, memo, lazy, Suspense, useRef } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { useSetRecoilState, useRecoilValue } from 'recoil';
-import { useMediaQuery, NewChatIcon } from '@librechat/client';
-import { PermissionTypes, Permissions, QueryKeys } from 'librechat-data-provider';
+import { useCallback, useEffect, useState, useMemo, memo, useRef } from 'react';
+import { useAtomValue } from 'jotai';
+import { useRecoilValue } from 'recoil';
+import { useMediaQuery } from '@librechat/client';
 import type { InfiniteQueryObserverResult } from '@tanstack/react-query';
 import type { ConversationListResponse } from 'librechat-data-provider';
 import type { List } from 'react-virtualized';
 import {
-  useLocalize,
-  useNewConvo,
-  useHasAccess,
-  useAuthContext,
-  useLocalStorage,
-  useNavScrolling,
-} from '~/hooks';
-import { useConversationsInfiniteQuery, useTitleGeneration } from '~/data-provider';
+  chatFilterTagsAtom,
+  chatSortAtom,
+  isArchivedChatViewAtom,
+} from '~/components/Conversations/chatFilters';
+import {
+  useConversationsInfiniteQuery,
+  usePinnedConversationsQuery,
+  useTitleGeneration,
+} from '~/data-provider';
+import { useLocalize, useAuthContext, useLocalStorage, useNavScrolling } from '~/hooks';
+import ProjectsSection from '~/components/Conversations/ProjectsSection';
+import ChatFilterMenu from '~/components/Conversations/ChatFilterMenu';
+import PinnedSection from '~/components/Conversations/PinnedSection';
+import useSidebarToggle from '~/hooks/Nav/useSidebarToggle';
 import { Conversations } from '~/components/Conversations';
+import { collectPinnedConversations } from '~/utils';
 import SearchBar from '~/components/Nav/SearchBar';
-import { clearMessagesCache } from '~/utils';
 import store from '~/store';
 
-const BookmarkNav = lazy(() => import('~/components/Nav/Bookmarks/BookmarkNav'));
+const chatsHeaderTrailing = <ChatFilterMenu />;
 
 const ConversationsSection = memo(() => {
   const localize = useLocalize();
-  const queryClient = useQueryClient();
-  const { newConversation } = useNewConvo();
   const isSmallScreen = useMediaQuery('(max-width: 768px)');
-  const setSidebarExpanded = useSetRecoilState(store.sidebarExpanded);
-  const conversation = useRecoilValue(store.conversationByIndex(0));
+  const { setSidebarOpen } = useSidebarToggle();
   const { isAuthenticated } = useAuthContext();
   useTitleGeneration(isAuthenticated);
 
   const [isChatsExpanded, setIsChatsExpanded] = useLocalStorage('chatsExpanded', true);
-  const [showLoading, setShowLoading] = useState(false);
-  const [tags, setTags] = useState<string[]>([]);
 
-  const hasAccessToBookmarks = useHasAccess({
-    permissionType: PermissionTypes.BOOKMARKS,
-    permission: Permissions.USE,
-  });
-
+  const tags = useAtomValue(chatFilterTagsAtom);
+  const sort = useAtomValue(chatSortAtom);
+  const isArchivedView = useAtomValue(isArchivedChatViewAtom);
   const search = useRecoilValue(store.search);
 
-  const { data, fetchNextPage, isFetchingNextPage, isLoading, isFetching } =
-    useConversationsInfiniteQuery(
-      {
-        tags: tags.length === 0 ? undefined : tags,
-        search: search.debouncedQuery || undefined,
-      },
-      {
-        enabled: isAuthenticated,
-        staleTime: 30000,
-        cacheTime: 300000,
-      },
-    );
+  const {
+    data,
+    fetchNextPage,
+    isFetchingNextPage,
+    isLoading,
+    isFetching,
+    isPreviousData,
+    isError,
+    refetch,
+  } = useConversationsInfiniteQuery(
+    {
+      /** Omitted rather than `false`: the parameter's absence is what the server reads
+       *  as "not archived", and a stray `isArchived=false` would key a third cache. */
+      isArchived: isArchivedView ? true : undefined,
+      sortBy: sort.field,
+      sortDirection: sort.direction,
+      tags: tags.length === 0 ? undefined : tags,
+      search: search.debouncedQuery || undefined,
+    },
+    {
+      enabled: isAuthenticated,
+      staleTime: 30000,
+      cacheTime: 300000,
+    },
+  );
 
   const computedHasNextPage = useMemo(() => {
     if (data?.pages && data.pages.length > 0) {
@@ -67,7 +78,6 @@ const ConversationsSection = memo(() => {
   const conversationsRef = useRef<List | null>(null);
 
   const { moveToTop } = useNavScrolling<ConversationListResponse>({
-    setShowLoading,
     fetchNextPage: async (options?) => {
       if (computedHasNextPage) {
         return fetchNextPage(options);
@@ -81,11 +91,45 @@ const ConversationsSection = memo(() => {
     return data ? data.pages.flatMap((page) => page.conversations) : [];
   }, [data]);
 
-  const toggleNav = useCallback(() => {
-    if (isSmallScreen) {
-      setSidebarExpanded(false);
-    }
-  }, [isSmallScreen, setSidebarExpanded]);
+  /** Pins are fetched on their own so one older than the first page of the chats list
+   * still shows on first paint, instead of appearing only once that list scrolls to it.
+   * The Chats filters are deliberately not passed: they narrow that list alone. */
+  const {
+    data: pinnedData,
+    isSuccess: isPinnedFetched,
+    isFetching: isPinnedFetching,
+    dataUpdatedAt: pinnedUpdatedAt,
+  } = usePinnedConversationsQuery({ enabled: isAuthenticated });
+  const isPinnedComplete = isPinnedFetched && !isPinnedFetching;
+
+  /* `groupConversations` strips pins from the chats groups. A failed
+     refetch keeps the previous dedicated result, so merge in pins from the
+     live chats cache rather than hiding a newly pinned row — but only while that
+     cache holds the same unarchived chats this section shows. */
+  const pinnedConversations = useMemo(
+    () =>
+      collectPinnedConversations(pinnedData?.conversations, isArchivedView ? [] : conversations),
+    [pinnedData?.conversations, conversations, isArchivedView],
+  );
+
+  /**
+   * Selecting a conversation is the most common close path — it must take
+   * the animated route or the drawer stalls on the new conversation's
+   * commit before it starts sliding. `afterSlide` carries that navigation:
+   * run synchronously it would flush the conversation switch in the tap's
+   * task and stall the slide anyway; deferred, it lands mid-slide. Desktop
+   * runs it immediately (nothing slides).
+   */
+  const toggleNav = useCallback(
+    (afterSlide?: () => void) => {
+      if (isSmallScreen) {
+        setSidebarOpen(false, afterSlide);
+        return;
+      }
+      afterSlide?.();
+    },
+    [isSmallScreen, setSidebarOpen],
+  );
 
   const loadMoreConversations = useCallback(() => {
     if (isFetchingNextPage || !computedHasNextPage) {
@@ -94,72 +138,88 @@ const ConversationsSection = memo(() => {
     fetchNextPage();
   }, [isFetchingNextPage, computedHasNextPage, fetchNextPage]);
 
-  const [isSearchLoading, setIsSearchLoading] = useState(
-    !!search.query && (search.isTyping || isLoading || isFetching),
-  );
+  const retryConversations = useCallback(() => {
+    void refetch();
+  }, [refetch]);
 
+  const isSearchLoading =
+    search.isTyping ||
+    (!!search.query && (isLoading || (isFetching && conversations.length === 0)));
+
+  /** Projects, Pinned and Chats share one scroll container so the sidebar scrolls
+   *  as a single surface: the chats list is virtualized against this viewport
+   *  rather than scrolling inside a pane of its own. */
+  const [scrollViewport, setScrollViewport] = useState<HTMLDivElement | null>(null);
+  const [scrollContent, setScrollContent] = useState<HTMLDivElement | null>(null);
+
+  /** Searching replaces what the surface holds: Projects and Pinned leave and
+   *  the chats become results. A scroll position kept from the previous
+   *  contents would open those results partway down whenever they are long
+   *  enough for the browser not to clamp it, so the surface returns to the top
+   *  whenever it changes what it is showing. */
+  const isSearching = Boolean(search.query);
   useEffect(() => {
-    if (search.isTyping) {
-      setIsSearchLoading(true);
-    } else if (!isLoading && !isFetching) {
-      setIsSearchLoading(false);
-    } else if (!!search.query && (isLoading || isFetching)) {
-      setIsSearchLoading(true);
+    if (scrollViewport) {
+      scrollViewport.scrollTop = 0;
     }
-  }, [search.query, search.isTyping, isLoading, isFetching]);
+  }, [isSearching, scrollViewport]);
 
   return (
     <div
-      className="flex h-full min-h-0 flex-col overflow-hidden pb-3"
+      className="flex h-full min-h-0 flex-col overflow-hidden pb-3 pt-2"
       role="region"
       aria-label={localize('com_ui_chat_history')}
     >
-      <div className="flex items-center gap-0.5 px-3">
-        {hasAccessToBookmarks && (
-          <Suspense fallback={null}>
-            <BookmarkNav tags={tags} setTags={setTags} />
-          </Suspense>
-        )}
-        {search.enabled && <SearchBar isSmallScreen={isSmallScreen} />}
-      </div>
-      {isSmallScreen && (
-        <div
-          role="button"
-          tabIndex={0}
-          aria-label={localize('com_ui_new_chat')}
-          className="flex w-full cursor-pointer items-center rounded-lg px-2.5 py-2 text-sm text-text-primary outline-none hover:bg-surface-active-alt focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-black dark:focus-visible:ring-white"
-          onClick={() => {
-            clearMessagesCache(queryClient, conversation?.conversationId);
-            queryClient.invalidateQueries([QueryKeys.messages]);
-            newConversation();
-            setSidebarExpanded(false);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              clearMessagesCache(queryClient, conversation?.conversationId);
-              queryClient.invalidateQueries([QueryKeys.messages]);
-              newConversation();
-              setSidebarExpanded(false);
-            }
-          }}
-        >
-          <NewChatIcon className="mr-2 h-5 w-5" />
-          <span className="truncate">{localize('com_ui_new_chat')}</span>
+      {/* The search field owns this row alone; filtering and ordering moved beside the
+          Chats heading, where the list they act on is labelled. On mobile the field
+          itself lives in the drawer's bottom bar, within thumb reach. */}
+      {!isSmallScreen && search.enabled && (
+        <div className="flex items-center px-3">
+          <SearchBar isSmallScreen={isSmallScreen} />
         </div>
       )}
-      <div className="flex min-h-0 flex-grow flex-col overflow-hidden">
-        <Conversations
-          conversations={conversations}
-          moveToTop={moveToTop}
-          toggleNav={toggleNav}
-          containerRef={conversationsRef}
-          loadMoreConversations={loadMoreConversations}
-          isLoading={isFetchingNextPage || showLoading || isLoading}
-          isSearchLoading={isSearchLoading}
-          isChatsExpanded={isChatsExpanded}
-          setIsChatsExpanded={setIsChatsExpanded}
-        />
+      <div
+        ref={setScrollViewport}
+        className="scrollbar-gutter-stable min-h-0 flex-1 overflow-y-auto overflow-x-hidden"
+      >
+        {/* `min-h-full` keeps the sections filling a tall sidebar, so the chats
+            list still claims the space below them when there is little to show. */}
+        <div ref={setScrollContent} className="flex min-h-full flex-col">
+          {!search.query && (
+            <ProjectsSection toggleNav={toggleNav} isAuthenticated={isAuthenticated} />
+          )}
+          {!search.query && (
+            <PinnedSection
+              conversations={pinnedConversations}
+              toggleNav={toggleNav}
+              isSmallScreen={isSmallScreen}
+              /* Only a successful drain proves the list is whole: a failed later
+                 page still publishes partial data and stops fetching. The Chats filters
+                 never reach this query, so nothing else can truncate it. */
+              membershipComplete={isPinnedComplete}
+              /* When that drain last ran, which decides whether it is current
+                 enough to prune the stored order against. */
+              membershipUpdatedAt={pinnedUpdatedAt}
+            />
+          )}
+          <Conversations
+            conversations={conversations}
+            moveToTop={moveToTop}
+            toggleNav={toggleNav}
+            containerRef={conversationsRef}
+            loadMoreConversations={loadMoreConversations}
+            isLoading={isFetchingNextPage || isLoading}
+            isSearchLoading={isSearchLoading || isPreviousData}
+            isChatsExpanded={isChatsExpanded}
+            setIsChatsExpanded={setIsChatsExpanded}
+            hasNextPage={computedHasNextPage}
+            isError={isError}
+            onRetry={retryConversations}
+            chatsHeaderTrailing={chatsHeaderTrailing}
+            scrollViewport={scrollViewport}
+            scrollContent={scrollContent}
+          />
+        </div>
       </div>
     </div>
   );
